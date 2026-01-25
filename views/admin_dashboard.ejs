@@ -1,0 +1,453 @@
+<%- include('partials/header',{user:user, title:'Admin Dashboard'}) %>
+
+  <% if (typeof query !=='undefined' && query && query.msg) { %>
+    <div class="mb-4">
+      <% if (query.msg==='deletedAll' ) { %>
+        <div class="alert alert-success border-0 shadow-sm rounded-3">Semua history jam kerja berhasil dihapus.</div>
+        <% } else if (query.msg==='deletedUser' ) { %>
+          <div class="alert alert-success border-0 shadow-sm rounded-3">History jam kerja staff berhasil dihapus.</div>
+          <% } else if (query.msg==='noUser' ) { %>
+            <div class="alert alert-warning border-0 shadow-sm rounded-3">Pilih staff terlebih dahulu.</div>
+            <% } else if (query.msg==='error' ) { %>
+              <div class="alert alert-danger border-0 shadow-sm rounded-3">Terjadi kesalahan saat memproses data.</div>
+              <% } else if (query.msg==='userUpdated' ) { %>
+                <div class="alert alert-success border-0 shadow-sm rounded-3">Data user berhasil diupdate.</div>
+                <% } else if (query.msg==='userDeleted' ) { %>
+                  <div class="alert alert-success border-0 shadow-sm rounded-3">User beserta history absen berhasil
+                    dihapus.</div>
+                  <% } else if (query.msg==='userNotFound' ) { %>
+                    <div class="alert alert-warning border-0 shadow-sm rounded-3">User tidak ditemukan.</div>
+                    <% } %>
+    </div>
+    <% } %>
+
+      <div class="row g-4">
+        <!-- LEFT COLUMN -->
+        <div class="col-md-4">
+          <!-- Card Generate QR -->
+          <div class="card border-0 mb-4 h-100">
+            <div class="card-body p-4">
+              <h5 class="fw-bold mb-3">Daily QR Code</h5>
+              <% const hasToken=(typeof token !=='undefined' && token && token.token); %>
+
+                <div class="d-grid">
+                  <button id="gen-qr" class="btn btn-primary py-2 <%= hasToken ? 'd-none' : '' %>">
+                    Generate New QR
+                  </button>
+                </div>
+
+                <div id="qr-area" class="mt-3 text-center <%= hasToken ? '' : 'd-none' %>">
+                  <% if(hasToken){ %>
+                    <div class="bg-light p-3 rounded-3 d-inline-block mb-3">
+                      <img src="/public/placeholder.png" id="qr-img" alt="QR" class="img-fluid"
+                        style="max-width: 200px;">
+                    </div>
+                    <p class="small text-muted text-monospace mb-2 text-break">Token: <%= token.token.slice(0,20) %>...
+                    </p>
+                    <button id="download-qr-btn" class="btn btn-sm btn-outline-primary rounded-pill px-3">
+                      Download Image
+                    </button>
+                    <% } %>
+                </div>
+            </div>
+          </div>
+
+          <!-- Card Kelola History -->
+          <div class="card border-0 mb-4">
+            <div class="card-body p-4">
+              <h5 class="fw-bold mb-3">Manage History</h5>
+
+              <!-- Warning Zone -->
+              <div class="p-3 rounded-3 bg-danger-subtle mb-4">
+                <h6 class="text-danger fw-bold small text-uppercase mb-2">Danger Zone</h6>
+                <form action="/admin/attendance/delete-all" method="POST"
+                  onsubmit="return confirm('⚠ Yakin ingin menghapus SEMUA history jam kerja semua staff? Tindakan ini tidak bisa dibatalkan.');">
+                  <button type="submit" class="btn btn-danger btn-sm w-100" style="border-radius: 0.5rem;">
+                    Delete ALL History
+                  </button>
+                </form>
+
+                <form action="/admin/attendance/delete-by-user" method="POST" class="mt-2"
+                  onsubmit="return confirm('Yakin ingin menghapus semua history jam kerja staff ini?');">
+                  <div class="input-group input-group-sm">
+                    <select name="userId" class="form-select border-danger text-danger" required>
+                      <option value="">- Select Staff -</option>
+                      <% users.forEach(u=> { %>
+                        <option value="<%= u._id %>">
+                          <%= u.name %>
+                        </option>
+                        <% }) %>
+                    </select>
+                    <button type="submit" class="btn btn-outline-danger">Delete</button>
+                  </div>
+                </form>
+              </div>
+
+              <hr class="opacity-10">
+
+              <h6 class="fw-bold small mb-3">Export Data</h6>
+
+              <!-- Download All -->
+              <form method="GET" action="/admin/attendance/export-all-xlsx" class="mb-3">
+                <button class="btn btn-success w-100 py-2 text-white" style="border-radius: 0.5rem;">
+                  Export All (.xlsx)
+                </button>
+              </form>
+
+              <!-- Download Range -->
+              <form method="GET" action="/admin/attendance/export-range-xlsx">
+                <div class="mb-2">
+                  <label class="form-label small text-muted">Date Range</label>
+                  <div class="input-group">
+                    <input type="date" name="startDate" class="form-control" required>
+                    <span class="input-group-text bg-light border-start-0 border-end-0">to</span>
+                    <input type="date" name="endDate" class="form-control" required>
+                  </div>
+                </div>
+                <button class="btn btn-outline-primary w-100" style="border-radius: 0.5rem;">
+                  Export Range
+                </button>
+              </form>
+            </div>
+          </div>
+        </div>
+
+        <!-- RIGHT COLUMN -->
+        <div class="col-md-8">
+          <div class="card border-0">
+            <div class="card-body p-4">
+              <div class="d-flex justify-content-between align-items-center mb-4">
+                <h4 class="fw-bold mb-0">User Management</h4>
+                <button class="btn btn-primary rounded-pill px-4" data-bs-toggle="modal" data-bs-target="#editUserModal"
+                  onclick="window.prepareCreateUser()">
+                  + New User
+                </button>
+              </div>
+
+              <!-- Search -->
+              <div class="input-group mb-3">
+                <span class="input-group-text bg-light border-end-0"><svg width="16" height="16" viewBox="0 0 24 24"
+                    fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <circle cx="11" cy="11" r="8"></circle>
+                    <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                  </svg></span>
+                <input type="text" id="user-search" class="form-control border-start-0 ps-0"
+                  placeholder="Search by name or email...">
+              </div>
+
+              <div class="table-responsive">
+                <table class="table table-hover align-middle" id="users-table">
+                  <thead class="bg-light text-muted small text-uppercase">
+                    <tr>
+                      <th class="border-0 rounded-start ps-3">Name</th>
+                      <th class="border-0">Email</th>
+                      <th class="border-0">Role</th>
+                      <th class="border-0">Division</th>
+                      <th class="border-0">History</th>
+                      <th class="border-0 rounded-end pe-3 text-end">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <% users.forEach(u=> { %>
+                      <tr>
+                        <td class="ps-3 fw-medium user-name">
+                          <%= u.name %>
+                        </td>
+                        <td class="text-muted user-email">
+                          <%= u.email || '—' %>
+                        </td>
+                        <td><span class="badge bg-soft text-dark border">
+                            <%= u.role %>
+                          </span></td>
+                        <td>
+                          <%= u.division %>
+                        </td>
+                        <td>
+                          <form method="GET" action="/admin/attendance/export-by-user">
+                            <input type="hidden" name="userId" value="<%= u._id %>">
+                            <button class="btn btn-sm btn-link text-decoration-none p-0">Download</button>
+                          </form>
+                        </td>
+                        <td class="pe-3 text-end">
+                          <button class="btn btn-sm btn-icon btn-white border shadow-sm me-1" data-bs-toggle="modal"
+                            data-bs-target="#editUserModal" data-mode="edit" data-id="<%= u._id %>"
+                            data-name="<%= u.name %>" data-email="<%= u.email %>" data-role="<%= u.role %>"
+                            data-division="<%= u.division %>" data-secondary-division="<%= u.secondaryDivision || '' %>"
+                            data-access="<%= u.canAccessSupervisorDashboard ? 'true' : 'false' %>" title="Edit">
+                            Edit
+                          </button>
+
+                          <form method="POST" action="/admin/delete-user" style="display:inline"
+                            onsubmit="return confirm('Yakin ingin menghapus user ini beserta semua history absennya?');">
+                            <input type="hidden" name="userId" value="<%= u._id %>">
+                            <button class="btn btn-sm btn-icon btn-white border shadow-sm text-danger" title="Delete">
+                              Del
+                            </button>
+                          </form>
+                        </td>
+                      </tr>
+                      <% }) %>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- MODAL CREATE / EDIT USER -->
+      <div class="modal fade" id="editUserModal" tabindex="-1" aria-labelledby="editUserModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+          <form method="POST" id="userForm" action="/admin/create-user" class="modal-content border-0 shadow-lg">
+            <div class="modal-header border-0 pb-0">
+              <h5 class="modal-title fw-bold" id="editUserModalLabel">Create User</h5>
+              <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body pt-4">
+              <input type="hidden" name="userId" id="userIdInput">
+
+              <div class="mb-3">
+                <label class="form-label small fw-bold text-muted">Full Name</label>
+                <input name="name" id="nameInput" class="form-control" required placeholder="e.g. John Doe">
+              </div>
+              <div class="mb-3">
+                <label class="form-label small fw-bold text-muted">Email Address</label>
+                <input name="email" id="emailInput" class="form-control" required placeholder="e.g. john@example.com">
+              </div>
+
+              <div class="row mb-3">
+                <div class="col-md-6">
+                  <label class="form-label small fw-bold text-muted">Role</label>
+                  <select name="role" id="roleInput" class="form-select">
+                    <option>Staff</option>
+                    <option>Supervisor</option>
+                    <option>Operational Manager</option>
+                    <option>General Manager</option>
+                    <option>Admin</option>
+                  </select>
+                </div>
+                <div class="col-md-6">
+                  <label class="form-label small fw-bold text-muted">Main Division</label>
+                  <select name="division" id="divisionInput" class="form-select">
+                    <option value="GM">General Manager(GM)</option>
+                    <option value="Admin">Admin</option>
+                    <option value="OC">ONEderland Consulting (OC)</option>
+                    <option value="N1">Neurone (N1)</option>
+                    <option value="SnG">Strategy and Growth (SnG)</option>
+                    <option value="e1">Education ONE (e1)</option>
+                    <option value="CE">Carbonenergy (CE)</option>
+                    <option value="EC">English Cafe (EC)</option>
+                    <option value="PX">PeraONE Experience (PX)</option>
+                    <option value="FN">Finance (FN)</option>
+                    <option value="HR">Human Resource (HR)</option>
+                    <option value="All Division">All Division</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="mb-3">
+                <div class="d-flex justify-content-between">
+                  <label class="form-label small fw-bold text-muted">Secondary Division (Optional)</label>
+                  <button type="button" class="btn btn-link btn-sm p-0 text-decoration-none" id="addDivisionBtn">+
+                    Add</button>
+                </div>
+                <div class="d-none" id="secondaryDivisionWrapper">
+                  <select name="secondaryDivision" id="secondaryDivisionInput" class="form-select">
+                    <option value="">— Select Additional Division —</option>
+                    <option value="Admin">Admin</option>
+                    <option value="General Manager">General Manager(GM)</option>
+                    <option value="OC">ONEderland Consulting (OC)</option>
+                    <option value="N1">Neurone (N1)</option>
+                    <option value="SnG">Strategy and Growth (SnG)</option>
+                    <option value="e1">Education ONE (e1)</option>
+                    <option value="CE">Carbonenergy (CE)</option>
+                    <option value="EC">English Cafe (EC)</option>
+                    <option value="PX">PeraONE Experience (PX)</option>
+                    <option value="FN">Finance (FN)</option>
+                    <option value="HR">Human Resource (HR)</option>
+                    <option value="All Division">All Division</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="mb-3">
+                <div class="form-check form-switch">
+                  <input class="form-check-input" type="checkbox" id="accessInput" name="canAccessSupervisorDashboard">
+                  <label class="form-check-label small" for="accessInput">Allow access to Supervisor Dashboard</label>
+                </div>
+              </div>
+
+              <div class="mb-3">
+                <label class="form-label small fw-bold text-muted">Password</label>
+                <input type="password" name="password" id="passwordInput" class="form-control"
+                  placeholder="Leave blank to keep current password">
+              </div>
+            </div>
+            <div class="modal-footer border-0 pt-0">
+              <button type="button" class="btn btn-light text-muted" data-bs-dismiss="modal">Cancel</button>
+              <button class="btn btn-primary px-4 rounded-pill" type="submit" id="userSubmitBtn">Save User</button>
+            </div>
+          </form>
+        </div>
+      </div>
+
+      <script>
+        // Generate QR
+        document.getElementById('gen-qr').addEventListener('click', async () => {
+          const res = await fetch('/admin/generate-qr', { method: 'POST' });
+          const data = await res.json();
+          if (data.dataUrl) {
+            const container = document.getElementById('qr-area');
+            const btn = document.getElementById('gen-qr');
+
+            // Hide button, show container
+            btn.classList.add('d-none');
+            container.classList.remove('d-none');
+
+            container.innerHTML =
+              '<div class="bg-light p-3 rounded-3 d-inline-block mb-3">' +
+              '<img src="' + data.dataUrl + '" id="generated-qr-img" class="img-fluid" style="max-width:200px">' +
+              '</div>' +
+              '<p class="small text-muted text-monospace mb-2 text-break">token: ' + data.token.slice(0, 30) + '...</p>' +
+              '<button id="download-qr-btn" class="btn btn-sm btn-outline-primary rounded-pill px-3">Download QR</button>';
+
+            setupDownloadBtn(data.dataUrl);
+          } else {
+            alert('No QR returned');
+          }
+        });
+
+        function setupDownloadBtn(dataUrl) {
+          const btn = document.getElementById('download-qr-btn');
+          if (!btn) return;
+          btn.onclick = function () {
+            const link = document.createElement('a');
+            link.href = dataUrl || document.querySelector('#qr-area img')?.src;
+            const today = new Date().toISOString().slice(0, 10);
+            link.download = 'attendance-qr-' + today + '.png';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+          };
+        }
+
+        // Initial setup if token exists on load
+        (function () {
+          fetch('/admin/qr/current')
+            .then(r => r.json())
+            .then(d => {
+              if (d.dataUrl) {
+                const img = document.getElementById('qr-img');
+                if (img) img.src = d.dataUrl;
+                setupDownloadBtn(d.dataUrl);
+              }
+            })
+            .catch(console.error);
+        })();
+
+        // SEARCH USER (client-side filter)
+        (function () {
+          const searchInput = document.getElementById('user-search');
+          const table = document.getElementById('users-table');
+          if (!searchInput || !table) return;
+
+          searchInput.addEventListener('input', function () {
+            const q = this.value.toLowerCase();
+            const rows = table.querySelectorAll('tbody tr');
+            rows.forEach(row => {
+              const name = (row.querySelector('.user-name')?.textContent || '').toLowerCase();
+              const email = (row.querySelector('.user-email')?.textContent || '').toLowerCase();
+              if (!q || name.includes(q) || email.includes(q)) {
+                row.style.display = '';
+              } else {
+                row.style.display = 'none';
+              }
+            });
+          });
+        })();
+
+        // MODAL CREATE / EDIT USER
+        (function () {
+          const modalEl = document.getElementById('editUserModal');
+          const form = document.getElementById('userForm');
+          const idInput = document.getElementById('userIdInput');
+          const nameInput = document.getElementById('nameInput');
+          const emailInput = document.getElementById('emailInput');
+          const roleInput = document.getElementById('roleInput');
+          const divisionInput = document.getElementById('divisionInput');
+          const secondaryDivisionInput = document.getElementById('secondaryDivisionInput');
+          const secondaryDivisionWrapper = document.getElementById('secondaryDivisionWrapper');
+          const addDivisionBtn = document.getElementById('addDivisionBtn');
+          const passwordInput = document.getElementById('passwordInput');
+          const accessInput = document.getElementById('accessInput');
+          const titleEl = document.getElementById('editUserModalLabel');
+
+
+          // dipanggil saat klik tombol "Create User"
+          window.prepareCreateUser = function () {
+            if (!form) return;
+            form.action = '/admin/create-user';
+            idInput.value = '';
+            nameInput.value = '';
+            emailInput.value = '';
+            roleInput.value = 'Staff';
+            if (divisionInput) divisionInput.value = 'OC';
+            if (secondaryDivisionInput) secondaryDivisionInput.value = '';
+            if (secondaryDivisionWrapper) secondaryDivisionWrapper.classList.add('d-none');
+            if (accessInput) accessInput.checked = false;
+            passwordInput.value = '';
+            if (titleEl) titleEl.textContent = 'Create User';
+          };
+
+          if (modalEl) {
+            modalEl.addEventListener('show.bs.modal', function (event) {
+              const button = event.relatedTarget;
+              if (!button) return;
+              const mode = button.getAttribute('data-mode');
+
+              if (mode === 'edit') {
+                const id = button.getAttribute('data-id');
+                const name = button.getAttribute('data-name') || '';
+                const email = button.getAttribute('data-email') || '';
+                const role = button.getAttribute('data-role') || 'Staff';
+                const division = button.getAttribute('data-division') || 'OC';
+                const secondaryDivision = button.getAttribute('data-secondary-division') || '';
+                const access = button.getAttribute('data-access') === 'true';
+
+                form.action = '/admin/update-user';
+                idInput.value = id;
+                nameInput.value = name;
+                emailInput.value = email;
+                roleInput.value = role;
+
+                if (divisionInput) divisionInput.value = division;
+
+                if (secondaryDivisionInput && secondaryDivisionWrapper) {
+                  if (secondaryDivision) {
+                    secondaryDivisionInput.value = secondaryDivision;
+                    secondaryDivisionWrapper.classList.remove('d-none');
+                  } else {
+                    secondaryDivisionInput.value = '';
+                    secondaryDivisionWrapper.classList.add('d-none');
+                  }
+                }
+
+                if (accessInput) accessInput.checked = access;
+                passwordInput.value = '';
+
+                if (titleEl) titleEl.textContent = 'Edit User';
+              } else {
+                window.prepareCreateUser();
+              }
+            });
+
+            if (addDivisionBtn && secondaryDivisionWrapper) {
+              addDivisionBtn.addEventListener('click', function () {
+                secondaryDivisionWrapper.classList.remove('d-none');
+              });
+            }
+          }
+        })();
+      </script>
+
+      <%- include('partials/footer') %>
