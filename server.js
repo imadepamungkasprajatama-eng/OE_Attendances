@@ -18,6 +18,9 @@ const Attendance = require('./models/Attendance');
 const QRToken = require('./models/QRToken');
 
 const app = express();
+// Trust proxy is required for Render/Heroku to correctly detect HTTPS
+app.set('trust proxy', 1);
+
 const PORT = process.env.PORT || 3000;
 
 app.set('view engine', 'ejs');
