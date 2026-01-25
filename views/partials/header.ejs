@@ -23,24 +23,35 @@
 </head>
 
 <body class="bg-light">
-  <nav class="navbar navbar-expand-lg">
+  <nav class="navbar navbar-expand-lg navbar-white bg-white shadow-sm">
     <div class="container-fluid">
-      <a class="navbar-brand" href="/">
-        <span style="color: var(--primary-color);">ONEderland</span> Attendance
+      <a class="navbar-brand fw-bold" href="/">
+        <span class="text-primary">ONEderland</span> Attendance
       </a>
-      <div class="collapse navbar-collapse">
-        <ul class="navbar-nav ms-auto">
+      <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarContent"
+        aria-controls="navbarContent" aria-expanded="false" aria-label="Toggle navigation">
+        <span class="navbar-toggler-icon"></span>
+      </button>
+      <div class="collapse navbar-collapse" id="navbarContent">
+        <ul class="navbar-nav ms-auto mb-2 mb-lg-0">
           <% if(user){ %>
-            <li class="nav-item"><a class="nav-link" href="#">
-                <span class="fw-semibold">
+            <li class="nav-item">
+              <span class="nav-link">
+                <span class="fw-semibold text-dark">
                   <%= user.name %>
-                </span> <span class="badge bg-light text-dark border">
+                </span>
+                <span class="badge bg-light text-dark border ms-1">
                   <%= user.role %>
                 </span>
-              </a></li>
-            <li class="nav-item"><a class="nav-link text-danger" href="/logout">Logout</a></li>
+              </span>
+            </li>
+            <li class="nav-item">
+              <a class="nav-link text-danger fw-medium" href="/logout">Logout</a>
+            </li>
             <% } else { %>
-              <li class="nav-item"><a class="nav-link" href="/login">Login</a></li>
+              <li class="nav-item">
+                <a class="nav-link btn btn-primary text-white px-4" href="/login">Login</a>
+              </li>
               <% } %>
         </ul>
       </div>

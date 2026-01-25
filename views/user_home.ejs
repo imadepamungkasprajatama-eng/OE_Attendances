@@ -29,16 +29,52 @@
   <div class="row g-4">
     <!-- Left Column: Actions & Timer -->
     <div class="col-lg-8">
-      <!-- QR Scanner Section -->
-      <div class="card mb-4">
-        <div class="card-body p-4">
-          <div class="d-flex justify-content-between align-items-center mb-3">
-            <h5 class="fw-bold mb-0">Scan Attendance</h5>
-            <button id="start-scan" class="btn btn-outline-primary btn-sm rounded-pill px-3" onclick="startQRScanner()">
-              Start Camera
-            </button>
+      <!-- QR Scanner Section (Modal Trigger) -->
+      <div class="card mb-4 border-0 shadow-sm" style="border-radius: 1rem;">
+        <div class="card-body p-4 d-flex align-items-center justify-content-between">
+          <div>
+            <h5 class="fw-bold mb-1">Scan QR Code</h5>
+            <p class="text-muted small mb-0">Use this to Check In/Out or Break</p>
           </div>
-          <div id="qr-result" class="small text-monospace text-break bg-light p-2 rounded">Waiting for scan...</div>
+          <button class="btn btn-primary rounded-pill px-4" data-bs-toggle="modal" data-bs-target="#qrScannerModal"
+            onclick="startQRScanner()">
+            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none"
+              stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+              class="feather feather-camera me-2">
+              <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path>
+              <circle cx="12" cy="13" r="4"></circle>
+            </svg>
+            Scan Camera
+          </button>
+        </div>
+      </div>
+
+      <!-- QR Scanner Modal -->
+      <div class="modal fade" id="qrScannerModal" tabindex="-1" aria-labelledby="qrScannerModalLabel"
+        aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+          <div class="modal-content border-0" style="border-radius: 1.5rem;">
+            <div class="modal-header border-0">
+              <h5 class="modal-title fw-bold" id="qrScannerModalLabel">Scan QR Code</h5>
+              <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"
+                onclick="stopQRScanner()"></button>
+            </div>
+            <div class="modal-body p-0 position-relative bg-black"
+              style="min-height: 300px; overflow: hidden; border-bottom-left-radius: 1.5rem; border-bottom-right-radius: 1.5rem;">
+              <!-- The ID 'qr-result' currently holds the text status, but often the video is appended to a container. 
+                   We will use a dedicated container for the video to avoid conflicts. -->
+              <div id="qr-reader-container" class="w-100 h-100 d-flex align-items-center justify-content-center">
+                <!-- Video will be appended here by JS -->
+              </div>
+
+              <!-- Overlay for status text -->
+              <div id="qr-result"
+                class="position-absolute bottom-0 w-100 text-center text-white p-2 bg-dark bg-opacity-75 small">
+                Camera starting...
+              </div>
+            </div>
+
+          </div>
         </div>
       </div>
 

@@ -92,52 +92,101 @@ function updateUI() {
 
 // QR scanning using camera + jsQR
 let currentQRToken = null;
+let videoStream = null;
+let isScanning = false;
+
 async function startQRScanner() {
-  const video = document.createElement('video');
-  const canvas = document.createElement('canvas');
-  const ctx = canvas.getContext('2d');
+  if (isScanning) return;
   const out = document.getElementById('qr-result');
-  const btn = document.getElementById('start-scan');
-  btn.disabled = true;
-  document.body.appendChild(video);
+  const container = document.getElementById('qr-reader-container');
+
+  if (out) out.innerText = "Requesting camera...";
+
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
-    video.srcObject = stream;
+    videoStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+    isScanning = true;
+
+    // Create video element
+    const video = document.createElement('video');
+    video.srcObject = videoStream;
+    video.setAttribute("playsinline", true);
+    video.style.width = "100%";
+    video.style.height = "100%";
+    video.style.objectFit = "cover";
     await video.play();
-    canvas.width = video.videoWidth || 640;
-    canvas.height = video.videoHeight || 480;
+
+    // Clear container and append video
+    if (container) {
+      container.innerHTML = '';
+      container.appendChild(video);
+    }
+
     const tick = () => {
+      if (!isScanning) return;
       if (video.readyState === video.HAVE_ENOUGH_DATA) {
+        if (out) out.innerText = "Scanning...";
+
+        const canvas = document.createElement('canvas');
         canvas.width = video.videoWidth;
         canvas.height = video.videoHeight;
+        const ctx = canvas.getContext('2d');
         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
         const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-        // jsQR is loaded from CDN in the page
-        const code = jsQR(imageData.data, imageData.width, imageData.height);
+
+        const code = jsQR(imageData.data, imageData.width, imageData.height, {
+          inversionAttempts: "dontInvert",
+        });
+
         if (code) {
-          // assume payload is token string
+          console.log("Found QR code", code.data);
           currentQRToken = code.data;
 
-          // SAVE IT
           saveQR(currentQRToken);
-          updateUI(); // Update UI immediately
+          updateUI();
 
-          // out.innerText = 'Scanned QR token: ' + currentQRToken; <-- handled by updateUI
-          stream.getTracks().forEach(t => t.stop());
-          video.remove();
-          canvas.remove();
-          btn.disabled = false;
-          return;
+          if (out) {
+            out.innerText = "QR Detected!";
+            out.classList.add("bg-success", "text-white");
+          }
+
+          // Auto close modal
+          const modalEl = document.getElementById('qrScannerModal');
+          if (modalEl) {
+            const closeBtn = modalEl.querySelector('.btn-close');
+            if (closeBtn) closeBtn.click();
+          } else {
+            stopQRScanner();
+          }
+        } else {
+          requestAnimationFrame(tick);
         }
+      } else {
+        requestAnimationFrame(tick);
       }
-      requestAnimationFrame(tick);
     };
     requestAnimationFrame(tick);
   } catch (e) {
+    console.error(e);
+    if (out) out.innerText = "Camera error: " + e.message;
     alert('Camera error: ' + e.message);
-    btn.disabled = false;
   }
 }
+
+window.stopQRScanner = function () {
+  isScanning = false;
+  if (videoStream) {
+    videoStream.getTracks().forEach(track => track.stop());
+    videoStream = null;
+  }
+  const container = document.getElementById('qr-reader-container');
+  if (container) container.innerHTML = '';
+
+  const out = document.getElementById('qr-result');
+  if (out) {
+    out.innerText = "Camera stopped.";
+    out.classList.remove("bg-success", "text-white");
+  }
+};
 
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
