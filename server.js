@@ -366,10 +366,12 @@ app.post('/admin/attendance/delete-by-user', ensureRole('Admin'), async (req, re
   }
 });
 
-// ADMIN: export CSV per user
+// ADMIN: export User Detail (Excel with Daily, Weekly, Monthly tabs)
 app.get('/admin/attendance/export-by-user', ensureRole('Admin'), async (req, res) => {
   try {
     const { userId } = req.query;
+    const yearParam = req.query.year || moment().format('YYYY');
+
     if (!userId) {
       return res.status(400).send('userId is required');
     }
@@ -379,49 +381,193 @@ app.get('/admin/attendance/export-by-user', ensureRole('Admin'), async (req, res
       return res.status(404).send('User not found');
     }
 
-    const records = await Attendance.find({ user: userId }).sort({ time: 1 });
+    const startOfYear = moment(yearParam + '-01-01', 'YYYY-MM-DD').startOf('year');
+    const endOfYear = startOfYear.clone().endOf('year');
 
-    const header = ['Name', 'Email', 'Date', 'Time', 'Action'];
+    const records = await Attendance.find({
+      user: userId,
+      time: { $gte: startOfYear.toDate(), $lte: endOfYear.toDate() }
+    }).sort({ time: 1 });
 
-    const esc = (v) => {
-      if (v === null || v === undefined) return '';
-      const s = v.toString();
-      const escaped = s.replace(/"/g, '""');
-      return `"${escaped}"`;
-    };
+    // --- Process Data ---
+    const dailyStats = new Map();   // "YYYY-MM-DD" -> { ... }
+    const weeklyStats = new Map();  // "WeekNum" -> { workMs, weekStart }
+    const monthlyStats = new Map(); // "MonthStr" -> { workMs }
 
-    const rows = [];
-    rows.push(header.map(esc).join(','));
+    // Initialize Daily Stats for every day (optional, but good for completeness? Or just populated days)
+    // Let's just do populated days + sparse logic for easier implementation first, 
+    // or iterate full year if requested. Supervisor export does full month. 
+    // For a full year, sparse is better to save empty rows, but "Daily Report" usually expects 365 rows? 
+    // Let's stick to "days with activity" for now to avoid massive empty files, unless critical.
+
+    let lastCheckIn = null;
+    let lastBreakStart = null;
+
+    // Helper to add duration to aggregates
+    function addToAggregates(dateObj, ms) {
+      if (ms <= 0) return;
+
+      // Monthly
+      const monthKey = moment(dateObj).format('MMMM');
+      if (!monthlyStats.has(monthKey)) monthlyStats.set(monthKey, { month: monthKey, workMs: 0 });
+      monthlyStats.get(monthKey).workMs += ms;
+
+      // Weekly
+      const weekNum = moment(dateObj).isoWeek();
+      if (!weeklyStats.has(weekNum)) {
+        const weekStart = moment(dateObj).startOf('isoWeek').format('YYYY-MM-DD');
+        weeklyStats.set(weekNum, { week: weekNum, weekStart, workMs: 0 });
+      }
+      weeklyStats.get(weekNum).workMs += ms;
+    }
 
     records.forEach(r => {
-      const date = moment(r.time).format('YYYY-MM-DD');
-      const time = moment(r.time).format('HH:mm:ss');
+      const dayKey = moment(r.time).format('YYYY-MM-DD');
+      if (!dailyStats.has(dayKey)) {
+        dailyStats.set(dayKey, {
+          dateObj: moment(r.time),
+          in: null,
+          out: null,
+          workMs: 0,
+          breakMs: 0
+        });
+      }
+      const day = dailyStats.get(dayKey);
+      const t = r.time.getTime();
 
-      rows.push([
-        esc(user.name),
-        esc(user.email || ''),
-        esc(date),
-        esc(time),
-        esc(r.action)
-      ].join(','));
+      if (r.action === 'check-in') {
+        if (!day.in) day.in = r.time;
+        lastCheckIn = t;
+        lastBreakStart = null;
+      } else if (r.action === 'check-out') {
+        if (!day.out || r.time > day.out) day.out = r.time;
+        if (lastCheckIn) {
+          const dur = t - lastCheckIn;
+          day.workMs += dur;
+          addToAggregates(r.time, dur);
+          lastCheckIn = null;
+        }
+      } else if (r.action === 'break-start') {
+        if (lastCheckIn) {
+          const dur = t - lastCheckIn;
+          day.workMs += dur;
+          addToAggregates(r.time, dur);
+          lastCheckIn = null;
+        }
+        lastBreakStart = t;
+      } else if (r.action === 'break-end') {
+        if (lastBreakStart) {
+          day.breakMs += (t - lastBreakStart);
+          lastBreakStart = null;
+        }
+        lastCheckIn = t;
+      }
     });
 
-    const csv = rows.join('\n');
+    // --- Generate Excel ---
+    const workbook = new ExcelJS.Workbook();
 
-    const rawName = (user.name || 'user').toString();
-    let safeName = rawName.replace(/[\r\n"]/g, '');
-    safeName = safeName.replace(/\s+/g, '_');
-    safeName = safeName.replace(/[^A-Za-z0-9._-]/g, '_');
-    if (!safeName) safeName = 'user';
-    const fileName = `attendance-${safeName}.csv`;
+    // 1. Monthly Summary
+    const wsMonth = workbook.addWorksheet('Monthly Summary');
+    wsMonth.columns = [
+      { header: 'Month', key: 'month', width: 20 },
+      { header: 'Total Work Hours', key: 'hours', width: 20 },
+    ];
+    wsMonth.getRow(1).font = { bold: true };
 
-    res.setHeader('Content-Type', 'text/csv');
+    for (const [key, val] of monthlyStats) {
+      wsMonth.addRow({
+        month: val.month,
+        hours: (val.workMs / (1000 * 3600)).toFixed(2)
+      });
+    }
+
+    // 2. Weekly Summary
+    const wsWeek = workbook.addWorksheet('Weekly Summary');
+    wsWeek.columns = [
+      { header: 'Week #', key: 'week', width: 10 },
+      { header: 'Start Date', key: 'start', width: 15 },
+      { header: 'Total Work Hours', key: 'hours', width: 20 },
+      { header: 'Status', key: 'status', width: 15 },
+    ];
+    wsWeek.getRow(1).font = { bold: true };
+
+    for (const [key, val] of weeklyStats) {
+      const hours = val.workMs / (1000 * 3600);
+      let status = 'Normal';
+      if (hours > 40) status = 'Overtime';
+      else if (hours < 40) status = 'Under Target';
+
+      const row = wsWeek.addRow({
+        week: val.week,
+        start: val.weekStart,
+        hours: hours.toFixed(2),
+        status: status
+      });
+
+      if (status === 'Overtime') row.getCell('status').font = { color: { argb: 'FF0000FF' } };
+      if (status === 'Under Target') row.getCell('status').font = { color: { argb: 'FFFF0000' } };
+    }
+
+    // 3. Daily Details
+    const wsDaily = workbook.addWorksheet('Daily Report');
+    wsDaily.columns = [
+      { header: 'Date', key: 'date', width: 15 },
+      { header: 'Day', key: 'day', width: 15 },
+      { header: 'Check In', key: 'in', width: 10 },
+      { header: 'Check Out', key: 'out', width: 10 },
+      { header: 'Work (Hrs)', key: 'work', width: 15 },
+      { header: 'Break (Hrs)', key: 'break', width: 15 },
+      { header: 'Status', key: 'status', width: 15 },
+    ];
+    wsDaily.getRow(1).font = { bold: true };
+
+    // Sort days chronologically
+    const sortedDays = [...dailyStats.values()].sort((a, b) => a.dateObj - b.dateObj);
+
+    // Format helper
+    const fmtTime = (d) => d ? moment(d).format('HH:mm') : '-';
+    const fmtDur = (ms) => {
+      if (!ms) return '00:00:00';
+      const h = Math.floor(ms / 3600000);
+      const m = Math.floor((ms % 3600000) / 60000);
+      const s = Math.floor((ms % 60000) / 1000);
+      return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+    };
+
+    sortedDays.forEach(d => {
+      const workHrs = d.workMs / (1000 * 3600);
+      const dayName = d.dateObj.format('dddd');
+
+      const row = wsDaily.addRow({
+        date: d.dateObj.format('YYYY-MM-DD'),
+        day: dayName,
+        in: fmtTime(d.in),
+        out: fmtTime(d.out),
+        work: fmtDur(d.workMs),
+        break: fmtDur(d.breakMs),
+        status: workHrs >= 8 ? 'Ok' : 'Under'
+      });
+
+      if (workHrs < 8 && dayName !== 'Saturday' && dayName !== 'Sunday') {
+        row.getCell('work').font = { color: { argb: 'FFFF0000' } };
+      } else {
+        row.getCell('work').font = { color: { argb: 'FF008000' } };
+      }
+    });
+
+    // Filename
+    const safeName = (user.name || 'user').replace(/[^a-zA-Z0-9]/g, '_');
+    const fileName = `attendance-${safeName}-${yearParam}.xlsx`;
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
-    res.send(csv);
+    await workbook.xlsx.write(res);
+    res.end();
 
   } catch (err) {
     console.error(err);
-    res.status(500).send('Error generating CSV');
+    res.status(500).send('Error generating CSV/Excel');
   }
 });
 
