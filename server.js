@@ -788,7 +788,8 @@ app.get('/admin/attendance/export-range-xlsx', ensureRole('Admin'), async (req, 
 app.get('/supervisor/attendance/export-user-month', ensureAuth, async (req, res) => {
   try {
     const allowedRoles = ['Supervisor', 'Operational Manager', 'General Manager', 'Admin'];
-    if (!allowedRoles.includes(req.user.role)) {
+    // Allow if role is in allowedRoles OR if user has explicit access
+    if (!allowedRoles.includes(req.user.role) && !req.user.canAccessSupervisorDashboard) {
       return res.status(403).send('Forbidden');
     }
 
@@ -815,13 +816,23 @@ app.get('/supervisor/attendance/export-user-month', ensureAuth, async (req, res)
     let managedDivisions = [];
     if (supervisor.division) managedDivisions.push(supervisor.division);
     if (supervisor.secondaryDivision) managedDivisions.push(supervisor.secondaryDivision);
+
+    // FIX: Check if they have "All Division" access
+    const hasAllDivision = managedDivisions.includes('All Division');
+
     managedDivisions = [...new Set(managedDivisions)];
 
     // Security check
     if (supervisor.role !== 'Admin') {
-      const userDivs = [user.division, user.secondaryDivision].filter(Boolean);
-      const ok = userDivs.some(d => managedDivisions.includes(d));
-      if (!ok) return res.status(403).send('Forbidden');
+      // If supervisor has "All Division", they manage everyone. 
+      // Otherwise, check if user's division is in managedDivisions.
+      if (!hasAllDivision) {
+        const userDivs = [user.division, user.secondaryDivision].filter(Boolean);
+        // If user has no division set, or one of their divisions is managed by this supervisor
+        const ok = userDivs.some(d => managedDivisions.includes(d));
+
+        if (!ok) return res.status(403).send('Forbidden: You do not manage this user\'s division.');
+      }
     }
 
     const records = await Attendance.find({
