@@ -188,11 +188,96 @@ window.stopQRScanner = function () {
   }
 };
 
+
+// Geofence & Auto Checkout logic
+let watchId = null;
+
+function calculateDistance(lat1, lon1, lat2, lon2) {
+  const R = 6371000; // meters
+  const toRad = v => v * Math.PI / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLon = toRad(lon2 - lon1);
+  const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
+    Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
+function startGeofenceMonitor() {
+  if (watchId !== null) return; // already watching
+  if (!navigator.geolocation) return;
+
+  console.log("Starting geofence monitor...");
+  const office = window.OFFICE_CONFIG;
+  if (!office) return;
+
+  watchId = navigator.geolocation.watchPosition(async (pos) => {
+    const lat = pos.coords.latitude;
+    const lng = pos.coords.longitude;
+    const dist = calculateDistance(lat, lng, office.lat, office.lng);
+
+    // console.log(`Distance: ${dist.toFixed(1)} m. User Status: ${window.USER_STATUS}`);
+
+    if (window.USER_STATUS === 'working' && dist > office.radius) {
+      console.log("User outside office radius! Attempting auto check-out...");
+      const token = getCurrentQR();
+      if (token) {
+        // Stop watching to prevent loops
+        navigator.geolocation.clearWatch(watchId);
+        watchId = null;
+
+        // Auto check-out
+        try {
+          const res = await postAction('check-out', token, lat, lng, pos.coords.accuracy);
+          if (!res.error) {
+            alert('You have been automatically checked out because you left the office area.');
+            location.reload();
+          } else {
+            console.error("Auto-checkout failed:", res.error);
+            // Resume watching? Or just let it be.
+          }
+        } catch (e) {
+          console.error(e);
+        }
+      }
+    }
+  }, (err) => {
+    console.warn("Geofence monitor error:", err);
+  }, {
+    enableHighAccuracy: true,
+    maximumAge: 10000,
+    timeout: 10000
+  });
+}
+
+function stopGeofenceMonitor() {
+  if (watchId !== null) {
+    navigator.geolocation.clearWatch(watchId);
+    watchId = null;
+  }
+}
+
+// UI Locking (Prevent Refresh/Close)
+function setupUILock() {
+  if (window.USER_STATUS === 'working') {
+    window.addEventListener('beforeunload', (e) => {
+      e.preventDefault();
+      e.returnValue = 'You are currently checked in. Are you sure you want to leave?';
+    });
+
+    // Also start geofence monitor if working
+    startGeofenceMonitor();
+  }
+}
+
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
   updateUI();
+  setupUILock();
 });
 
 window.doGeolocatedAction = doGeolocatedAction;
 window.startQRScanner = startQRScanner;
 window.getCurrentQR = () => getStoredQR() || currentQRToken;
+

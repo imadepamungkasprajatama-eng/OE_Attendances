@@ -1,4 +1,4 @@
-<%- include('partials/header',{user:user, title:'Home'}) %>
+<%- include('partials/header',{user:user, title:'Home', isWorking: (attendanceSummary.status==='working' )}) %>
 
   <div class="row mb-4">
     <div class="col-12">
@@ -242,6 +242,14 @@
       <script src="/public/js/attendance.js"></script>
 
       <script>
+        // Inject server-side config to window for client logic
+        window.OFFICE_CONFIG = {
+          lat: <%= office.lat %>,
+          lng: <%= office.lng %>,
+          radius: <%= office.radius %>
+        };
+        window.USER_STATUS = '<%= attendanceSummary.status %>';
+
         async function doAction(act) {
           const qr = window.getCurrentQR();
           if (!qr) {
