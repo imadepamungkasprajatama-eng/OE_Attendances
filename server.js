@@ -425,114 +425,162 @@ app.get('/admin/attendance/export-by-user', ensureRole('Admin'), async (req, res
   }
 });
 
-// ADMIN: export semua attendance ke Excel
+// ADMIN: export Year Summary (Weekly & Monthly tabs)
 app.get('/admin/attendance/export-all-xlsx', ensureRole('Admin'), async (req, res) => {
   try {
-    const records = await Attendance.find({}).sort({ user: 1, time: 1 });
+    const yearParam = req.query.year || moment().format('YYYY');
+    const startOfYear = moment(yearParam + '-01-01', 'YYYY-MM-DD').startOf('year');
+    const endOfYear = startOfYear.clone().endOf('year');
+
+    const records = await Attendance.find({
+      time: { $gte: startOfYear.toDate(), $lte: endOfYear.toDate() }
+    }).sort({ user: 1, time: 1 });
+
     const users = await User.find({});
     const userMap = new Map(users.map(u => [u._id.toString(), u]));
 
-    // Group by User -> Date
-    const userDailyStats = new Map(); // "userId-date" -> { ...stats }
+    // --- Process Data ---
+    const monthlyStats = new Map(); // "userId|MonthStr" -> { workMs }
+    const weeklyStats = new Map();  // "userId|WeekNum" -> { workMs, weekStart }
+
+    // Temporary tracker for accumulating work durations per user
+    const userState = new Map(); // userId -> { lastCheckIn, lastBreakStart }
+
+    // Constants
+    const R_WORKING = 'working';
+    const R_BREAK = 'break';
+
+    // We need to iterate chronologically per user to calculate durations accurately
+    // Records are already sorted by user, time.
+
+    // Helper to add duration
+    function addDuration(userId, dateObj, ms) {
+      if (ms <= 0) return;
+
+      // Monthly
+      const monthKey = moment(dateObj).format('MMMM'); // January, February...
+      const mKey = `${userId}|${monthKey}`;
+      if (!monthlyStats.has(mKey)) monthlyStats.set(mKey, { userId, month: monthKey, workMs: 0 });
+      monthlyStats.get(mKey).workMs += ms;
+
+      // Weekly
+      const weekNum = moment(dateObj).isoWeek();
+      const wKey = `${userId}|${weekNum}`;
+      if (!weeklyStats.has(wKey)) {
+        // Find start of this week for label
+        const weekStart = moment(dateObj).startOf('isoWeek').format('YYYY-MM-DD');
+        weeklyStats.set(wKey, { userId, week: weekNum, weekStart, workMs: 0 });
+      }
+      weeklyStats.get(wKey).workMs += ms;
+    }
 
     records.forEach(r => {
       const userId = r.user.toString();
-      const dateKey = moment(r.time).format('YYYY-MM-DD');
-      const key = `${userId}|${dateKey}`;
-
-      if (!userDailyStats.has(key)) {
-        userDailyStats.set(key, {
-          userId,
-          dateKey,
-          checkIn: null,
-          checkOut: null,
-          workMs: 0,
-          breakMs: 0,
-          lastCheckIn: null,
-          lastBreakStart: null
-        });
-      }
-
-      const data = userDailyStats.get(key);
       const t = r.time.getTime();
 
+      if (!userState.has(userId)) userState.set(userId, { lastCheckIn: null, lastBreakStart: null });
+      const state = userState.get(userId);
+
       if (r.action === 'check-in') {
-        if (!data.checkIn) data.checkIn = r.time;
-        data.lastCheckIn = t;
+        state.lastCheckIn = t;
+        // Reset break if any (shouldn't happen if logic is strict, but safety)
+        state.lastBreakStart = null;
       } else if (r.action === 'check-out') {
-        if (!data.checkOut || r.time > data.checkOut) data.checkOut = r.time;
-        if (data.lastCheckIn) {
-          data.workMs += (t - data.lastCheckIn);
-          data.lastCheckIn = null;
+        if (state.lastCheckIn) {
+          addDuration(userId, r.time, t - state.lastCheckIn);
+          state.lastCheckIn = null;
         }
+        // If checking out and was on break? (Handled by Auto-Stop logic in POST action, 
+        // but here we just process raw logs. If break-end exists, it will handle it. 
+        // If not, we might miss break deduction if we were tracking work time? 
+        // Actually, simple logic: Work time = (CheckOut - CheckIn) - (Total Break Time inside).
+        // OR: Simple Interval Logic: CheckIn->BreakStart (Work), BreakEnd->CheckOut (Work).
+
+        // Let's use Simple Interval Logic for robustness:
+        // If we see check-out, we close whatever 'work' session was open.
+        // But wait, if we have CheckIn -> BreakStart -> BreakEnd -> CheckOut
+        // We need to capture: (BreakStart - CheckIn) + (CheckOut - BreakEnd).
       } else if (r.action === 'break-start') {
-        if (data.lastCheckIn) {
-          data.workMs += (t - data.lastCheckIn);
-          data.lastCheckIn = null;
+        if (state.lastCheckIn) {
+          // Time worked so far
+          addDuration(userId, r.time, t - state.lastCheckIn);
+          state.lastCheckIn = null; // Pause work timer
         }
-        data.lastBreakStart = t;
+        state.lastBreakStart = t;
       } else if (r.action === 'break-end') {
-        if (data.lastBreakStart) {
-          data.breakMs += (t - data.lastBreakStart);
-          data.lastBreakStart = null;
-        }
-        data.lastCheckIn = t;
+        state.lastBreakStart = null;
+        state.lastCheckIn = t; // Resume work timer
       }
     });
 
+    // --- Generate Excel ---
     const workbook = new ExcelJS.Workbook();
-    const sheet = workbook.addWorksheet('Attendance');
 
-    sheet.columns = [
+    // Worksheet 1: Monthly Summary
+    const wsMonth = workbook.addWorksheet('Monthly Summary');
+    wsMonth.columns = [
       { header: 'Name', key: 'name', width: 25 },
       { header: 'Division', key: 'division', width: 10 },
-      { header: 'Date', key: 'date', width: 15 },
-      { header: 'Clock In', key: 'in', width: 10 },
-      { header: 'Clock Out', key: 'out', width: 10 },
-      { header: 'Work (Hrs)', key: 'work', width: 15 },
-      { header: 'Break (Hrs)', key: 'break', width: 15 },
-      { header: 'Status', key: 'status', width: 15 }
+      { header: 'Month', key: 'month', width: 15 },
+      { header: 'Total Hours', key: 'hours', width: 15 },
     ];
+    wsMonth.getRow(1).font = { bold: true };
 
-    sheet.getRow(1).font = { bold: true };
-
-    for (const [key, val] of userDailyStats) {
+    for (const [key, val] of monthlyStats) {
       const u = userMap.get(val.userId) || { name: 'Unknown', division: '-' };
-      const workHours = val.workMs / (1000 * 60 * 60);
-      const breakHours = val.breakMs / (1000 * 60 * 60);
+      const hours = val.workMs / (1000 * 60 * 60);
 
-      function formatDuration(sec) {
-        if (!sec) return '00:00:00';
-        const h = Math.floor(sec / 3600);
-        const m = Math.floor((sec % 3600) / 60);
-        const s = Math.floor(sec % 60);
-        return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
-      }
-
-      const rowValues = {
+      const row = wsMonth.addRow({
         name: u.name,
         division: u.division,
-        date: val.dateKey,
-        in: val.checkIn ? moment(val.checkIn).format('HH:mm') : '-',
-        out: val.checkOut ? moment(val.checkOut).format('HH:mm') : '-',
-        work: formatDuration(val.workMs / 1000),
-        break: formatDuration(val.breakMs / 1000),
-        status: workHours >= 8 ? 'Ok' : 'Under'
-      };
+        month: val.month,
+        hours: hours.toFixed(2)
+      });
 
-      const row = sheet.addRow(rowValues);
+      // Hyperlink ?? ExcelJS hyperlinks are usually URLs. 
+      // Link to internal sheet or web dashboard requires full URL.
+      // Let's link to the Supervisor Dashboard URL for that user & month
+      // Format: /supervisor/attendance/export-user-month?userId=...&month=YYYY-MM
+      // Or just the dashboard view: /supervisor?division=...
 
-      if (workHours < 8) {
-        row.getCell('work').font = { color: { argb: 'FFFF0000' } };
-      } else {
-        row.getCell('work').font = { color: { argb: 'FF008000' } };
-      }
-      if (breakHours > 1) {
-        row.getCell('break').fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFCCCC' } };
-      }
+      // Let's try pointing to the web endpoint for that user's specific export
+      // const link = `${process.env.BASE_URL || 'http://localhost:3000'}/supervisor/attendance/export-user-month?userId=${u._id}&month=${yearParam}-${moment().month(val.month).format('MM')}`;
+      // row.getCell('name').value = { text: u.name, hyperlink: link };
     }
 
-    const fileName = 'attendance-all-summary.xlsx';
+    // Worksheet 2: Weekly Summary
+    const wsWeek = workbook.addWorksheet('Weekly Summary');
+    wsWeek.columns = [
+      { header: 'Name', key: 'name', width: 25 },
+      { header: 'Division', key: 'division', width: 10 },
+      { header: 'Week #', key: 'weekNum', width: 8 },
+      { header: 'Start Date', key: 'startDate', width: 15 },
+      { header: 'Total Hours', key: 'hours', width: 15 },
+      { header: 'Status', key: 'status', width: 15 },
+    ];
+    wsWeek.getRow(1).font = { bold: true };
+
+    for (const [key, val] of weeklyStats) {
+      const u = userMap.get(val.userId) || { name: 'Unknown', division: '-' };
+      const hours = val.workMs / (1000 * 60 * 60);
+      let status = 'Normal';
+      if (hours > 40) status = 'Overtime';
+      else if (hours < 40) status = 'Under Target';
+
+      const row = wsWeek.addRow({
+        name: u.name,
+        division: u.division,
+        weekNum: val.week,
+        startDate: val.weekStart,
+        hours: hours.toFixed(2),
+        status: status
+      });
+
+      if (status === 'Overtime') row.getCell('status').font = { color: { argb: 'FF0000FF' } }; // Blue? Or Green.
+      if (status === 'Under Target') row.getCell('status').font = { color: { argb: 'FFFF0000' } }; // Red
+    }
+
+    const fileName = `attendance-summary-${yearParam}.xlsx`;
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
     await workbook.xlsx.write(res);
@@ -540,7 +588,7 @@ app.get('/admin/attendance/export-all-xlsx', ensureRole('Admin'), async (req, re
 
   } catch (err) {
     console.error(err);
-    res.status(500).send('Error generating Excel file');
+    res.status(500).send('Error generating Year Summary Excel');
   }
 });
 
@@ -943,6 +991,20 @@ app.post('/attendance/action', ensureAuth, async (req, res) => {
       return res.status(400).json({
         error: 'Out of allowed location. Distance: ' + Math.round(dist) + ' meters'
       });
+    }
+
+    // Check last status for Auto-Stop Break logic
+    const lastAtt = await Attendance.findOne({ user: req.user._id }).sort({ time: -1 });
+
+    if (action === 'check-out' && lastAtt && lastAtt.action === 'break-start') {
+      console.log(`[Auto-Stop Break] User ${req.user.email} checking out while on break. Inserting break-end.`);
+      const breakEnd = new Attendance({
+        user: req.user._id,
+        action: 'break-end',
+        time: new Date(), // Now
+        meta: { auto: true, lat, lng, qrToken, accuracy }
+      });
+      await breakEnd.save();
     }
 
     const att = new Attendance({

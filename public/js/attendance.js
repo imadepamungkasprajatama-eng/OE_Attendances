@@ -26,9 +26,12 @@ async function doGeolocatedAction(action, qrToken) {
     const lng = pos.coords.longitude;
     const accuracy = pos.coords.accuracy;
     const r = await postAction(action, qrToken, lat, lng, accuracy);
-    if (r.error) alert('Error: ' + r.error);
-    else alert('Success: ' + action);
-    location.reload();
+    if (r.error) {
+      alert('Error: ' + r.error);
+    } else {
+      // Success - no alert, just reload
+      location.reload();
+    }
   }, (err) => alert('Geolocation error: ' + err.message), { enableHighAccuracy: true });
 }
 
