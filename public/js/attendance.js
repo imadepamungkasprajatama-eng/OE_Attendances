@@ -260,13 +260,17 @@ function stopGeofenceMonitor() {
 
 // UI Locking (Prevent Refresh/Close)
 function setupUILock() {
-  if (window.USER_STATUS === 'working') {
+  const status = window.USER_STATUS;
+  if (status === 'working' || status === 'break') {
     window.addEventListener('beforeunload', (e) => {
       e.preventDefault();
-      e.returnValue = 'You are currently checked in. Are you sure you want to leave?';
+      e.returnValue = 'You are currently active (Working/Break). Are you sure you want to leave?';
     });
+  }
 
-    // Also start geofence monitor if working
+  // Geofence only if working (User didn't ask for auto-check-in/out on break, just logout prevention)
+  // But usually break is taken onsite, so maybe we keep it off to avoid accidental check-outs while grabbing lunch nearby
+  if (status === 'working') {
     startGeofenceMonitor();
   }
 }

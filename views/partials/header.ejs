@@ -45,9 +45,11 @@
                 </span>
               </span>
             </li>
-            <% if(locals.isWorking) { %>
+            <% if(locals.isBusy) { %>
               <li class="nav-item">
-                <span class="nav-link text-muted" title="Cannot logout while working">Working...</span>
+                <span class="nav-link text-muted" title="Cannot logout while busy">
+                  <%= locals.statusText %>
+                </span>
               </li>
               <% } else { %>
                 <li class="nav-item">

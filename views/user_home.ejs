@@ -1,4 +1,6 @@
-<%- include('partials/header',{user:user, title:'Home', isWorking: (attendanceSummary.status==='working' )}) %>
+<%- include('partials/header',{ user: user, title: 'Home' , isBusy: (attendanceSummary.status==='working' ||
+  attendanceSummary.status==='break' ), statusText: (attendanceSummary.status==='working' ? 'Working...' :
+  (attendanceSummary.status==='break' ? 'On Break...' : '' )) }) %>
 
   <div class="row mb-4">
     <div class="col-12">
