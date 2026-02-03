@@ -513,6 +513,7 @@ app.get('/supervisor', ensureAuth, async (req, res) => {
       saturdaySummaries, // Pass Saturday data
       canManageUsers: (req.user.role === 'Admin' || req.user.role === 'General Manager' || ((req.user.role === 'Supervisor' || req.user.role === 'Operational Manager') && (req.user.division === 'HR' || req.user.secondaryDivision === 'HR'))),
       settings,
+      query: req.query,
       isBusy: (statusObj.status === 'working' || statusObj.status === 'break'),
       statusText: statusObj.label
     });
