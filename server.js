@@ -500,17 +500,20 @@ app.get('/supervisor', ensureAuth, async (req, res) => {
       });
     }
 
+    const statusObj = await getUserStatus(req.user._id);
+
     return res.render('supervisor_dashboard', {
       user: req.user,
-      division: activeDivision,
+      divisionMembers: members,
+      divisionName: activeDivision,
       managedDivisions,
-      monthParam,
-      monthLabel: startOfMonth.format('MMMM YYYY'),
-      memberSummaries,
-      saturdaySummaries,
-      canManageUsers, // Pass permission flag to view
+      query: req.query,
+      moment,
+      saturdaySummaries, // Pass Saturday data
+      canManageUsers: (req.user.role === 'Admin' || req.user.role === 'General Manager'), // GM/Admin can manage users
       settings,
-      query: req.query
+      isBusy: (statusObj.status === 'working' || statusObj.status === 'break'),
+      statusText: statusObj.label
     });
   } catch (err) {
     console.error(err);
@@ -602,10 +605,14 @@ app.get('/my-history', ensureAuth, async (req, res) => {
       .sort({ time: -1 })
       .limit(100);
 
+    const statusObj = await getUserStatus(req.user._id);
+
     res.render('my_history', {
       user: req.user,
       records,
-      moment
+      moment,
+      isBusy: (statusObj.status === 'working' || statusObj.status === 'break'),
+      statusText: statusObj.label
     });
   } catch (err) {
     console.error(err);
@@ -1971,5 +1978,40 @@ mongoose.connect(process.env.MONGODB_URI, {
 }).then(async () => {
   console.log("✅ MongoDB connected");
   await ensureDefaultAdmin();
+  // Helper: Get User Status (Working/Break/Idle)
+  async function getUserStatus(userId) {
+    const today = moment();
+    const startOfDay = today.clone().startOf('day').toDate();
+    const endOfDay = today.clone().endOf('day').toDate();
+
+    const records = await Attendance.find({
+      user: userId,
+      time: { $gte: startOfDay, $lte: endOfDay }
+    }).sort({ time: 1 });
+
+    let lastCheckIn = null;
+    let lastBreakStart = null;
+
+    records.forEach(r => {
+      const t = r.time;
+      if (r.action === 'check-in') {
+        lastCheckIn = t;
+      } else if (r.action === 'check-out') {
+        if (lastCheckIn) lastCheckIn = null;
+      } else if (r.action === 'break-start') {
+        if (lastCheckIn) lastCheckIn = null;
+        lastBreakStart = t;
+      } else if (r.action === 'break-end') {
+        if (lastBreakStart) lastBreakStart = null;
+        lastCheckIn = t;
+      }
+    });
+
+    if (lastCheckIn) return { status: 'working', label: 'Working...' };
+    if (lastBreakStart) return { status: 'break', label: 'On Break...' };
+    return { status: 'idle', label: '' };
+  }
+
+  // Start Server
   app.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`));
 }).catch(err => console.error("MongoDB connection error:", err));
