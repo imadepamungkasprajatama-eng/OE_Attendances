@@ -505,10 +505,11 @@ app.get('/supervisor', ensureAuth, async (req, res) => {
     return res.render('supervisor_dashboard', {
       user: req.user,
       divisionMembers: members,
-      divisionName: activeDivision,
+      division: activeDivision, // Used by view for dropdown
       managedDivisions,
-      query: req.query,
-      moment,
+      monthParam,
+      monthLabel: startOfMonth.format('MMMM YYYY'),
+      memberSummaries,
       saturdaySummaries, // Pass Saturday data
       canManageUsers: (req.user.role === 'Admin' || req.user.role === 'General Manager'), // GM/Admin can manage users
       settings,
