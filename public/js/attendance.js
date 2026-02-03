@@ -14,25 +14,75 @@ async function postAction(action, qrToken, lat, lng, accuracy) {
 
 async function doGeolocatedAction(action, qrToken) {
   if (!qrToken) {
-    alert('QR token required. Scan QR first.');
+    Swal.fire({
+      icon: 'warning',
+      title: 'QR Code Required',
+      text: 'Please scan the QR code first.'
+    });
     return;
   }
   if (!navigator.geolocation) {
-    alert('Geolocation not supported.');
+    Swal.fire({
+      icon: 'error',
+      title: 'Geolocation Error',
+      text: 'Geolocation is not supported by this browser.'
+    });
     return;
   }
+  // Show loading state immediately because GPS can take time
+  Swal.fire({
+    title: 'Locating...',
+    text: 'Acquiring high-accuracy GPS position. Please wait up to 30 seconds.',
+    allowOutsideClick: false,
+    didOpen: () => {
+      Swal.showLoading();
+    }
+  });
+
   navigator.geolocation.getCurrentPosition(async (pos) => {
+    // Update status to "Processing"
+    Swal.update({
+      title: 'Processing...',
+      text: 'Sending data to server...'
+    });
+
     const lat = pos.coords.latitude;
     const lng = pos.coords.longitude;
     const accuracy = pos.coords.accuracy;
-    const r = await postAction(action, qrToken, lat, lng, accuracy);
-    if (r.error) {
-      alert('Error: ' + r.error);
-    } else {
-      // Success - no alert, just reload
-      location.reload();
+
+    try {
+      const r = await postAction(action, qrToken, lat, lng, accuracy);
+      if (r.error) {
+        Swal.fire({
+          icon: 'error',
+          title: 'Action Failed',
+          text: r.error
+        });
+      } else {
+        // Success
+        Swal.fire({
+          icon: 'success',
+          title: 'Success!',
+          timer: 1500,
+          showConfirmButton: false
+        }).then(() => {
+          location.reload();
+        });
+      }
+    } catch (err) {
+      Swal.fire({
+        icon: 'error',
+        title: 'Network Error',
+        text: err.message
+      });
     }
-  }, (err) => alert('Geolocation error: ' + err.message), { enableHighAccuracy: true });
+  }, (err) => {
+    Swal.fire({
+      icon: 'error',
+      title: 'Geolocation Error',
+      text: err.message + '. Ensure GPS is enabled.'
+    });
+  }, { enableHighAccuracy: true, timeout: 30000, maximumAge: 0 });
 }
 
 // QR Persistance + UI Locking
@@ -171,7 +221,11 @@ async function startQRScanner() {
   } catch (e) {
     console.error(e);
     if (out) out.innerText = "Camera error: " + e.message;
-    alert('Camera error: ' + e.message);
+    Swal.fire({
+      icon: 'error',
+      title: 'Camera Error',
+      text: e.message
+    });
   }
 }
 
@@ -222,8 +276,13 @@ function startGeofenceMonitor() {
 
     // console.log(`Distance: ${dist.toFixed(1)} m. User Status: ${window.USER_STATUS}`);
 
-    if (window.USER_STATUS === 'working' && dist > office.radius) {
-      console.log("User outside office radius! Attempting auto check-out...");
+    // Auto-checkout Safe Buffer
+    // GPS Drift can cause "jumps". We shouldn't kick user out for small drifts.
+    // We only auto-checkout if they are SIGNIFICANTLY far away (e.g., > 200m OR 5x radius).
+    const safeDistance = Math.max(office.radius * 5, 200);
+
+    if (window.USER_STATUS === 'working' && dist > safeDistance) {
+      console.log(`User outside safe buffer (${Math.round(dist)}m > ${safeDistance}m)! Attempting auto check-out...`);
       const token = getCurrentQR();
       if (token) {
         // Stop watching to prevent loops
@@ -234,8 +293,15 @@ function startGeofenceMonitor() {
         try {
           const res = await postAction('check-out', token, lat, lng, pos.coords.accuracy);
           if (!res.error) {
-            alert('You have been automatically checked out because you left the office area.');
-            location.reload();
+            Swal.fire({
+              icon: 'info',
+              title: 'Auto Checked Out',
+              text: 'You have been automatically checked out because you left the office area.',
+              timer: 3000,
+              showConfirmButton: false
+            }).then(() => {
+              location.reload();
+            });
           } else {
             console.error("Auto-checkout failed:", res.error);
             // Resume watching? Or just let it be.

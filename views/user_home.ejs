@@ -8,7 +8,7 @@
         <div class="card-body p-4 p-lg-5 d-flex align-items-center justify-content-between flex-wrap">
           <div>
             <h2 class="fw-bold mb-1">Hi, <%= user.name.split(' ')[0] %>! 👋</h2>
-          <p class="text-muted mb-0">Here' s what's happening today.</p>
+            <p class="text-muted mb-0">Here' s what's happening today.</p>
           </div>
           <div class="mt-3 mt-md-0 text-end">
             <p class="small text-uppercase text-muted fw-bold mb-1">
@@ -143,7 +143,12 @@
     <div class="col-lg-4">
       <div class="card h-100">
         <div class="card-body p-4">
-          <h5 class="fw-bold mb-4">Today's Stats</h5>
+          <div class="d-flex justify-content-between align-items-center mb-4">
+            <h5 class="fw-bold mb-0">Today's Stats</h5>
+            <a href="/my-history" class="btn btn-sm btn-outline-primary rounded-pill px-3 fw-bold">
+              <i class="fas fa-history me-1"></i> My History
+            </a>
+          </div>
 
           <div class="mb-4">
             <label class="small text-muted fw-bold text-uppercase">Work Timer</label>
@@ -238,100 +243,100 @@
           </div>
         </div>
       </div>
-    </div>
-    <% } %>
+      <% } %>
 
-      <script src="/public/js/attendance.js"></script>
+        <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+        <script src="/public/js/attendance.js"></script>
 
-      <script>
-        // Inject server-side config to window for client logic
-        window.OFFICE_CONFIG = {
-          lat: <%= office.lat %>,
-          lng: <%= office.lng %>,
-          radius: <%= office.radius %>
+        <script>
+          // Inject server-side config to window for client logic
+          window.OFFICE_CONFIG = {
+            lat: <%= office.lat %>,
+            lng: <%= office.lng %>,
+            radius: <%= office.radius %>
         };
-        window.USER_STATUS = '<%= attendanceSummary.status %>';
+          window.USER_STATUS = '<%= attendanceSummary.status %>';
 
-        async function doAction(act) {
-          const qr = window.getCurrentQR();
-          if (!qr) {
-            if (!confirm('No scanned QR token found. Use server preview token?')) return;
+          async function doAction(act) {
+            const qr = window.getCurrentQR();
+            if (!qr) {
+              if (!confirm('No scanned QR token found. Use server preview token?')) return;
+            }
+            const token = qr || '<%= token.token %>';
+            await window.doGeolocatedAction(act, token);
           }
-          const token = qr || '<%= token.token %>';
-          await window.doGeolocatedAction(act, token);
-        }
-      </script>
+        </script>
 
-      <!-- ==== LIVE TIMER SCRIPT START ==== -->
-      <script>
-        (function () {
-          // data dari server
-          const status = "<%= attendanceSummary.status %>";
-          const baseWorkSeconds = Number("<%= attendanceSummary.baseWorkSeconds || 0 %>");
-          const baseBreakSeconds = Number("<%= attendanceSummary.baseBreakSeconds || 0 %>");
-          const currentWorkStart = "<%= attendanceSummary.currentWorkStart != null ? attendanceSummary.currentWorkStart : '' %>";
-          const currentBreakStart = "<%= attendanceSummary.currentBreakStart != null ? attendanceSummary.currentBreakStart : '' %>";
+        <!-- ==== LIVE TIMER SCRIPT START ==== -->
+        <script>
+          (function () {
+            // data dari server
+            const status = "<%= attendanceSummary.status %>";
+            const baseWorkSeconds = Number("<%= attendanceSummary.baseWorkSeconds || 0 %>");
+            const baseBreakSeconds = Number("<%= attendanceSummary.baseBreakSeconds || 0 %>");
+            const currentWorkStart = "<%= attendanceSummary.currentWorkStart != null ? attendanceSummary.currentWorkStart : '' %>";
+            const currentBreakStart = "<%= attendanceSummary.currentBreakStart != null ? attendanceSummary.currentBreakStart : '' %>";
 
-          const workStartMs = currentWorkStart ? Number(currentWorkStart) : null;
-          const breakStartMs = currentBreakStart ? Number(currentBreakStart) : null;
+            const workStartMs = currentWorkStart ? Number(currentWorkStart) : null;
+            const breakStartMs = currentBreakStart ? Number(currentBreakStart) : null;
 
-          const workTotalEl = document.getElementById('work-total');
-          const breakTotalEl = document.getElementById('break-total');
-          const workLiveEl = document.getElementById('work-live');
-          const breakLiveEl = document.getElementById('break-live');
-          const statusLabel = document.getElementById('status-label');
+            const workTotalEl = document.getElementById('work-total');
+            const breakTotalEl = document.getElementById('break-total');
+            const workLiveEl = document.getElementById('work-live');
+            const breakLiveEl = document.getElementById('break-live');
+            const statusLabel = document.getElementById('status-label');
 
-          function formatDuration(sec) {
-            sec = Math.floor(sec);
-            if (sec < 0) sec = 0;
-            const h = Math.floor(sec / 3600);
-            const m = Math.floor((sec % 3600) / 60);
-            const s = sec % 60;
-            const pad = n => n.toString().padStart(2, '0');
-            return pad(h) + ':' + pad(m) + ':' + pad(s);
-          }
-
-          function updateStatusLabel() {
-            if (!statusLabel) return;
-            if (status === 'working') statusLabel.textContent = 'Sedang bekerja';
-            else if (status === 'break') statusLabel.textContent = 'Sedang break';
-            else statusLabel.textContent = 'Idle';
-          }
-
-          function tick() {
-            const nowMs = Date.now();
-
-            let workTotalSec = baseWorkSeconds;
-            let breakTotalSec = baseBreakSeconds;
-
-            // Hitung sesi kerja yang masih berjalan
-            if (status === 'working' && workStartMs) {
-              const sessionSec = (nowMs - workStartMs) / 1000;
-              workTotalSec += sessionSec;
-              if (workLiveEl) workLiveEl.textContent = formatDuration(sessionSec);
-            } else {
-              if (workLiveEl) workLiveEl.textContent = "00:00:00";
+            function formatDuration(sec) {
+              sec = Math.floor(sec);
+              if (sec < 0) sec = 0;
+              const h = Math.floor(sec / 3600);
+              const m = Math.floor((sec % 3600) / 60);
+              const s = sec % 60;
+              const pad = n => n.toString().padStart(2, '0');
+              return pad(h) + ':' + pad(m) + ':' + pad(s);
             }
 
-            // Hitung sesi break yang masih berjalan
-            if (status === 'break' && breakStartMs) {
-              const sessionSec = (nowMs - breakStartMs) / 1000;
-              breakTotalSec += sessionSec;
-              if (breakLiveEl) breakLiveEl.textContent = formatDuration(sessionSec);
-            } else {
-              if (breakLiveEl) breakLiveEl.textContent = "00:00:00";
+            function updateStatusLabel() {
+              if (!statusLabel) return;
+              if (status === 'working') statusLabel.textContent = 'Sedang bekerja';
+              else if (status === 'break') statusLabel.textContent = 'Sedang break';
+              else statusLabel.textContent = 'Idle';
             }
 
-            // Update total harian
-            if (workTotalEl) workTotalEl.textContent = formatDuration(workTotalSec);
-            if (breakTotalEl) breakTotalEl.textContent = formatDuration(breakTotalSec);
-          }
+            function tick() {
+              const nowMs = Date.now();
 
-          updateStatusLabel();
-          tick();
-          setInterval(tick, 1000);
-        })();
-      </script>
-      <!-- ==== LIVE TIMER SCRIPT END ==== -->
+              let workTotalSec = baseWorkSeconds;
+              let breakTotalSec = baseBreakSeconds;
 
-      <%- include('partials/footer') %>
+              // Hitung sesi kerja yang masih berjalan
+              if (status === 'working' && workStartMs) {
+                const sessionSec = (nowMs - workStartMs) / 1000;
+                workTotalSec += sessionSec;
+                if (workLiveEl) workLiveEl.textContent = formatDuration(sessionSec);
+              } else {
+                if (workLiveEl) workLiveEl.textContent = "00:00:00";
+              }
+
+              // Hitung sesi break yang masih berjalan
+              if (status === 'break' && breakStartMs) {
+                const sessionSec = (nowMs - breakStartMs) / 1000;
+                breakTotalSec += sessionSec;
+                if (breakLiveEl) breakLiveEl.textContent = formatDuration(sessionSec);
+              } else {
+                if (breakLiveEl) breakLiveEl.textContent = "00:00:00";
+              }
+
+              // Update total harian
+              if (workTotalEl) workTotalEl.textContent = formatDuration(workTotalSec);
+              if (breakTotalEl) breakTotalEl.textContent = formatDuration(breakTotalSec);
+            }
+
+            updateStatusLabel();
+            tick();
+            setInterval(tick, 1000);
+          })();
+        </script>
+        <!-- ==== LIVE TIMER SCRIPT END ==== -->
+
+        <%- include('partials/footer') %>

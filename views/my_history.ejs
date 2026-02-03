@@ -1,0 +1,79 @@
+<%- include('partials/header',{user:user, title:'My History'}) %>
+
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <a href="/" class="btn btn-outline-secondary btn-sm rounded-pill px-3">
+            ← Back to Home
+        </a>
+        <h4 class="fw-bold mb-0">My Attendance History</h4>
+    </div>
+
+    <div class="card border-0 shadow-sm rounded-4">
+        <div class="card-body p-4">
+            <div class="table-responsive">
+                <table class="table table-hover align-middle">
+                    <thead class="bg-light text-muted small text-uppercase">
+                        <tr>
+                            <th class="ps-3 border-0 rounded-start">Date</th>
+                            <th class="border-0">Action</th>
+                            <th class="border-0">Time</th>
+                            <th class="border-0 rounded-end">Details</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <% if(records && records.length) { %>
+                            <% records.forEach(r=> { %>
+                                <tr>
+                                    <td class="ps-3 fw-medium">
+                                        <%= moment(r.time).format('ddd, DD MMM YYYY') %>
+                                    </td>
+                                    <td>
+                                        <% if(r.action==='check-in' ) { %>
+                                            <span
+                                                class="badge bg-success-subtle text-success border border-success-subtle">Check
+                                                In</span>
+                                            <% } else if(r.action==='check-out' ) { %>
+                                                <span
+                                                    class="badge bg-secondary-subtle text-secondary border border-secondary-subtle">Check
+                                                    Out</span>
+                                                <% } else if(r.action==='break-start' ) { %>
+                                                    <span
+                                                        class="badge bg-warning-subtle text-warning border border-warning-subtle">Break
+                                                        Start</span>
+                                                    <% } else if(r.action==='break-end' ) { %>
+                                                        <span
+                                                            class="badge bg-info-subtle text-info border border-info-subtle">Break
+                                                            End</span>
+                                                        <% } %>
+                                    </td>
+                                    <td class="font-monospace text-muted">
+                                        <%= moment(r.time).format('HH:mm:ss') %>
+                                    </td>
+                                    <td class="small text-muted">
+                                        <% if(r.locationLat) { %>
+                                            <i class="fas fa-map-marker-alt me-1"></i>
+                                            <%= r.locationLat.toFixed(5) %>, <%= r.locationLng.toFixed(5) %>
+                                                    <% } else { %>
+                                                        -
+                                                        <% } %>
+                                    </td>
+                                </tr>
+                                <% }) %>
+                                    <% } else { %>
+                                        <tr>
+                                            <td colspan="4" class="text-center py-4 text-muted">No history found.</td>
+                                        </tr>
+                                        <% } %>
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- Simple Pagination (if needed, but showing last 100 is fine for now) -->
+            <% if(records.length>= 100) { %>
+                <div class="text-center mt-3 text-muted small">
+                    Showing last 100 records.
+                </div>
+                <% } %>
+        </div>
+    </div>
+
+    <%- include('partials/footer') %>

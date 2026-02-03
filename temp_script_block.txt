@@ -1,0 +1,12 @@
+
+<% if (typeof query !== 'undefined' && query.openModal) { %>
+<script>
+  document.addEventListener("DOMContentLoaded", function() {
+    var modalEl = document.getElementById('scheduleModal');
+    if(modalEl) {
+      var myModal = new bootstrap.Modal(modalEl);
+      myModal.show();
+    }
+  });
+</script>
+<% } %>

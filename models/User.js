@@ -19,21 +19,21 @@ const UserSchema = new mongoose.Schema({
   name: String,
   email: String,
   role: {
-  type: String,
-  enum: ['Admin', 'Supervisor', 'Operational Manager', 'General Manager', 'Staff'],
-  default: 'Staff'
+    type: String,
+    enum: ['Admin', 'Supervisor', 'Operational Manager', 'General Manager', 'Staff'],
+    default: 'Staff'
   },
 
   division: {
     type: String,
-    enum: ['Admin','GM', 'OC', 'N1', 'SnG', 'e1', 'CE', 'EC', 'PX', 'Finance', 'HR', 'All Division'],
+    enum: ['Admin', 'GM', 'OC', 'N1', 'SnG', 'e1', 'CE', 'EC', 'PX', 'Finance', 'HR', 'All Division'],
     default: 'OC'
   },
 
   secondaryDivision: {
-  type: String,
-  enum: ['Admin', 'GM', 'OC', 'N1', 'SnG', 'e1', 'CE', 'EC', 'PX', 'FN', 'HR', 'All Division'],
-  default: undefined
+    type: String,
+    enum: ['Admin', 'GM', 'OC', 'N1', 'SnG', 'e1', 'CE', 'EC', 'PX', 'FN', 'HR', 'All Division'],
+    default: undefined
   },
 
   canAccessSupervisorDashboard: {
@@ -49,6 +49,14 @@ const UserSchema = new mongoose.Schema({
     type: Number,
     default: 60
   },
+
+  // 0=Sun, 1=Mon, ..., 6=Sat
+  workingDays: {
+    type: [Number],
+    default: [1, 2, 3, 4, 5] // Mon-Fri
+  },
+
+  shiftGroup: { type: String, enum: ['A', 'B', 'C', 'All'], default: undefined },
 
   password: String,
   // ... field lain kalau ada

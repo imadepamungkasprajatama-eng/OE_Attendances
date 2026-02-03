@@ -16,6 +16,7 @@ const bcrypt = require('bcrypt');
 const User = require('./models/User');
 const Attendance = require('./models/Attendance');
 const QRToken = require('./models/QRToken');
+const SystemSettings = require('./models/SystemSettings');
 
 const app = express();
 // Trust proxy is required for Render/Heroku to correctly detect HTTPS
@@ -105,9 +106,37 @@ function ensureAuth(req, res, next) {
 function ensureRole(role) {
   return (req, res, next) => {
     if (!req.isAuthenticated()) return res.redirect('/login');
-    if (req.user.role === role || req.user.role === 'Admin') return next();
+
+    // Check if role is an array of allowed roles
+    if (Array.isArray(role)) {
+      if (role.includes(req.user.role) || req.user.role === 'Admin') return next();
+    } else {
+      // Single role check
+      if (req.user.role === role || req.user.role === 'Admin') return next();
+    }
+
     return res.status(403).send('Forbidden');
   };
+}
+
+// Middleware specifically for User Management (Admin or HR Supervisor)
+function checkUserManagement(req, res, next) {
+  if (!req.isAuthenticated()) return res.redirect('/login');
+
+  if (req.user.role === 'Admin') return next();
+
+  // Check for Supervisor/GM with HR division or All Division
+  const allowedRoles = ['Supervisor', 'General Manager'];
+  const isHrOrAll = req.user.division === 'HR' ||
+    req.user.division === 'All Division' ||
+    req.user.secondaryDivision === 'HR' ||
+    req.user.secondaryDivision === 'All Division';
+
+  if (allowedRoles.includes(req.user.role) && isHrOrAll) {
+    return next();
+  }
+
+  return res.status(403).send('Forbidden: HR Access Required');
 }
 
 // ====== ROUTES ======
@@ -116,14 +145,81 @@ function ensureRole(role) {
 app.get('/', ensureAuth, async (req, res) => {
   // Admin dashboard
   if (req.user.role === 'Admin') {
-    const users = await User.find();
+    const users = await User.find().sort({ name: 1 });
     const token = await QRToken.getCurrent();
+    if (token) {
+      token.qrImage = await qrcode.toDataURL(token.token);
+    }
+    const settings = await SystemSettings.findOne() || {
+      officeLat: parseFloat(process.env.OFFICE_LAT || '0'),
+      officeLng: parseFloat(process.env.OFFICE_LNG || '0'),
+      officeRadius: parseFloat(process.env.OFFICE_RADIUS_METERS || '100')
+    };
+
+    // --- SATURDAY ATTENDANCE LOGIC ---
+    // 1. Determine Month
+    const currentMonth = moment().format('YYYY-MM');
+    const selectedMonth = req.query.month || currentMonth;
+
+    const startOfMonth = moment(selectedMonth, 'YYYY-MM').startOf('month').toDate();
+    const endOfMonth = moment(selectedMonth, 'YYYY-MM').endOf('month').toDate();
+
+    // 2. Fetch Attendance for Duration Calculation
+    const allAtt = await Attendance.find({
+      time: { $gte: startOfMonth, $lte: endOfMonth }
+    }).sort({ time: 1 });
+
+    const attByUser = new Map();
+    allAtt.forEach(a => {
+      const uid = a.user.toString();
+      if (!attByUser.has(uid)) attByUser.set(uid, []);
+      attByUser.get(uid).push(a);
+    });
+
+    // 3. Calculate Hours
+    users.forEach(u => {
+      const userLogs = attByUser.get(u._id.toString()) || [];
+      let satSeconds = 0;
+
+      // Group by day
+      const logsByDay = new Map();
+      userLogs.forEach(l => {
+        const d = moment(l.time).format('YYYY-MM-DD');
+        if (!logsByDay.has(d)) logsByDay.set(d, []);
+        logsByDay.get(d).push(l);
+      });
+
+      for (const [day, dayLogs] of logsByDay) {
+        if (moment(day).isoWeekday() === 6) { // Saturday
+          // Fix: Support both 'action' (lowercase) and legacy 'type' (uppercase)
+          const ci = dayLogs.find(x => x.action === 'check-in' || x.type === 'CHECK_IN');
+          const co = dayLogs.find(x => x.action === 'check-out' || x.type === 'CHECK_OUT');
+          if (ci && co) {
+            satSeconds += (new Date(co.time) - new Date(ci.time)) / 1000;
+          }
+        }
+      }
+
+      if (satSeconds > 0) {
+        const h = Math.floor(satSeconds / 3600);
+        const m = Math.floor((satSeconds % 3600) / 60);
+        const s = Math.floor(satSeconds % 60);
+        u.saturdayHoursStr = `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+        u.hasSaturdayAttendance = true;
+      } else {
+        u.saturdayHoursStr = "00:00:00";
+        u.hasSaturdayAttendance = false;
+      }
+    });
+
     return res.render('admin_dashboard', {
       user: req.user,
       users,
-      token,
+      token, // Kept token name as per original
+      settings,
       moment,
-      query: req.query
+      selectedMonth, // Pass filter
+      query: req.query // Kept query
     });
   }
 
@@ -238,11 +334,22 @@ app.get('/', ensureAuth, async (req, res) => {
 // SUPERVISOR / OM / GM DASHBOARD (bulanan + multi-divisi)
 app.get('/supervisor', ensureAuth, async (req, res) => {
   try {
+    const settings = await SystemSettings.findOne(); // Ensure settings are fetched
+
     const allowedRoles = ['Supervisor', 'Operational Manager', 'General Manager', 'Admin'];
     // Allow if role is in allowedRoles OR if user has explicit access
     if (!allowedRoles.includes(req.user.role) && !req.user.canAccessSupervisorDashboard) {
       return res.status(403).send('Forbidden');
     }
+
+    // Permission to manage users: Admin OR Supervisor with 'HR'/'All Division'
+    const isHrOrAll = req.user.division === 'HR' ||
+      req.user.division === 'All Division' ||
+      req.user.secondaryDivision === 'HR' ||
+      req.user.secondaryDivision === 'All Division';
+
+    const canManageUsers = req.user.role === 'Admin' ||
+      ((req.user.role === 'Supervisor' || req.user.role === 'General Manager') && isHrOrAll);
 
     const monthParam = req.query.month || moment().format('YYYY-MM'); // "YYYY-MM"
 
@@ -270,6 +377,11 @@ app.get('/supervisor', ensureAuth, async (req, res) => {
 
     const members = activeDivision
       ? await User.find({ division: activeDivision }).sort({ name: 1 })
+      : [];
+
+    // Fetch all members for Saturday Report (ignoring activeDivision filter)
+    const saturdayMembers = (managedDivisions.length > 0)
+      ? await User.find({ division: { $in: managedDivisions } }).sort({ name: 1 })
       : [];
 
     function computeWorkSeconds(records) {
@@ -313,6 +425,7 @@ app.get('/supervisor', ensureAuth, async (req, res) => {
       return `${pad(h)}:${pad(m)}:${pad(s)}`;
     }
 
+    // 1. Dashboard List (Filtered by activeDivision)
     const memberSummaries = [];
     for (const m of members) {
       const records = await Attendance.find({
@@ -321,10 +434,67 @@ app.get('/supervisor', ensureAuth, async (req, res) => {
       }).sort({ time: 1 });
 
       const workSeconds = computeWorkSeconds(records);
+
+      const lastRecord = await Attendance.findOne({ user: m._id }).sort({ time: -1 });
+      let currentStatus = 'Idle';
+      if (lastRecord) {
+        if (lastRecord.action === 'check-in' || lastRecord.action === 'break-end') currentStatus = 'Working';
+        else if (lastRecord.action === 'break-start') currentStatus = 'Break';
+        else if (lastRecord.action === 'check-out') currentStatus = 'Idle';
+      }
+
       memberSummaries.push({
         user: m,
         workSeconds,
-        workText: formatDuration(workSeconds)
+        workText: formatDuration(workSeconds),
+        status: currentStatus
+      });
+    }
+
+    // 2. Saturday Summaries (All Managed Divisions)
+    const saturdaySummaries = [];
+    const satQueryEnd = endOfMonth.clone().add(2, 'days');
+
+    for (const m of saturdayMembers) {
+      const satRecords = await Attendance.find({
+        user: m._id,
+        time: { $gte: startOfMonth.toDate(), $lte: satQueryEnd.toDate() }
+      }).sort({ time: 1 });
+
+      let satSeconds = 0;
+      let lastIn = null;
+
+      satRecords.forEach(r => {
+        const d = moment(r.time);
+        if (r.action === 'check-in') {
+          if (d.day() === 6) {
+            lastIn = r.time;
+          } else {
+            lastIn = null;
+          }
+        } else if (r.action === 'check-out') {
+          if (lastIn) {
+            const dur = (r.time - lastIn) / 1000;
+            if (dur > 0) satSeconds += dur;
+            lastIn = null;
+          }
+        }
+      });
+
+      const hasSaturdayAttendance = satSeconds > 0;
+      let saturdayHoursStr = "00:00:00";
+      if (hasSaturdayAttendance) {
+        const h = Math.floor(satSeconds / 3600);
+        const min = Math.floor((satSeconds % 3600) / 60);
+        const s = Math.floor(satSeconds % 60);
+        const pad = n => n.toString().padStart(2, '0');
+        saturdayHoursStr = `${pad(h)}:${pad(min)}:${pad(s)}`;
+      }
+
+      saturdaySummaries.push({
+        user: m,
+        saturdayHoursStr,
+        hasSaturdayAttendance
       });
     }
 
@@ -334,11 +504,110 @@ app.get('/supervisor', ensureAuth, async (req, res) => {
       managedDivisions,
       monthParam,
       monthLabel: startOfMonth.format('MMMM YYYY'),
-      memberSummaries
+      memberSummaries,
+      saturdaySummaries,
+      canManageUsers, // Pass permission flag to view
+      settings,
+      query: req.query
     });
   } catch (err) {
     console.error(err);
     return res.status(500).send('Error loading supervisor dashboard');
+  }
+});
+
+// ADMIN DASHBOARD
+app.get('/admin', ensureRole('Admin'), async (req, res) => {
+  try {
+    const settings = await SystemSettings.findOne() || {};
+    const selectedMonth = req.query.month || moment().format('YYYY-MM');
+    const startOfMonth = moment(selectedMonth + '-01', 'YYYY-MM').startOf('month');
+    const endOfMonth = startOfMonth.clone().endOf('month');
+    const satQueryEnd = endOfMonth.clone().add(2, 'days');
+
+    // QR Token for Admin View
+    const qrDoc = await QRToken.getCurrent();
+    let tokenData = null;
+    if (qrDoc) {
+      const qrImage = await qrcode.toDataURL(qrDoc.token);
+      tokenData = { ...qrDoc.toObject(), qrImage };
+    }
+
+    const allUsers = await User.find({}).sort({ name: 1 });
+
+    const users = await Promise.all(allUsers.map(async (u) => {
+      // Robust Saturday Calculation (Same as Supervisor)
+      const satRecords = await Attendance.find({
+        user: u._id,
+        time: { $gte: startOfMonth.toDate(), $lte: satQueryEnd.toDate() }
+      }).sort({ time: 1 });
+
+      let satSeconds = 0;
+      let lastIn = null;
+
+      satRecords.forEach(r => {
+        const d = moment(r.time);
+        if (r.action === 'check-in') {
+          if (d.day() === 6) {
+            lastIn = r.time;
+          } else {
+            lastIn = null;
+          }
+        } else if (r.action === 'check-out') {
+          if (lastIn) {
+            const dur = (r.time - lastIn) / 1000;
+            if (dur > 0) satSeconds += dur;
+            lastIn = null;
+          }
+        }
+      });
+
+      let saturdayHoursStr = "00:00:00";
+      if (satSeconds > 0) {
+        const h = Math.floor(satSeconds / 3600);
+        const m = Math.floor((satSeconds % 3600) / 60);
+        const s = Math.floor(satSeconds % 60);
+        const pad = n => n.toString().padStart(2, '0');
+        saturdayHoursStr = `${pad(h)}:${pad(m)}:${pad(s)}`;
+      }
+
+      return {
+        ...u.toObject(),
+        saturdayHoursStr,
+        hasSaturdayAttendance: satSeconds > 0
+      };
+    }));
+
+    res.render('admin_dashboard', {
+      user: req.user,
+      users,
+      settings,
+      selectedMonth,
+      token: tokenData,
+      query: req.query
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).send('Error loading admin dashboard');
+  }
+});
+
+// STAFF: My History
+app.get('/my-history', ensureAuth, async (req, res) => {
+  try {
+    // Fetch last 100 records
+    const records = await Attendance.find({ user: req.user._id })
+      .sort({ time: -1 })
+      .limit(100);
+
+    res.render('my_history', {
+      user: req.user,
+      records,
+      moment
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).send('Error loading history');
   }
 });
 
@@ -363,6 +632,89 @@ app.post('/admin/attendance/delete-by-user', ensureRole('Admin'), async (req, re
   } catch (e) {
     console.error(e);
     res.redirect('/?msg=error');
+  }
+});
+
+// ADMIN: export ALL Data (Excel) - Supports Date Range
+app.get('/admin/attendance/export-all-xlsx', ensureRole('Admin'), async (req, res) => {
+  try {
+    const { startDate, endDate } = req.query;
+    let query = {};
+
+    // Date Range Filter
+    if (startDate && endDate) {
+      query.time = {
+        $gte: moment(startDate).startOf('day').toDate(),
+        $lte: moment(endDate).endOf('day').toDate()
+      };
+    }
+
+    const records = await Attendance.find(query).populate('user', 'name email division role').sort({ time: 1 });
+
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet('Attendance Log');
+
+    sheet.columns = [
+      { header: 'Date', key: 'date', width: 15 },
+      { header: 'Time', key: 'time', width: 10 },
+      { header: 'Name', key: 'name', width: 20 },
+      { header: 'Email', key: 'email', width: 25 },
+      { header: 'Division', key: 'division', width: 15 },
+      { header: 'Role', key: 'role', width: 15 },
+      { header: 'Action', key: 'action', width: 15 },
+      { header: 'Lat', key: 'lat', width: 15 },
+      { header: 'Lng', key: 'lng', width: 15 },
+      { header: 'Distance (m)', key: 'dist', width: 15 },
+      { header: 'QR Token', key: 'qr', width: 20 },
+    ];
+
+    // Helper for Distance
+    const settings = await SystemSettings.findOne();
+    const officeLat = settings ? settings.officeLat : 0;
+    const officeLng = settings ? settings.officeLng : 0;
+
+    function getDistance(lat, lon) {
+      if (!lat || !lon) return 0;
+      const R = 6371000;
+      const toRad = v => v * Math.PI / 180;
+      const dLat = toRad(lat - officeLat);
+      const dLon = toRad(lon - officeLng);
+      const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+        Math.cos(toRad(officeLat)) * Math.cos(toRad(lat)) *
+        Math.sin(dLon / 2) * Math.sin(dLon / 2);
+      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+      return Math.round(R * c);
+    }
+
+    records.forEach(r => {
+      const u = r.user || {};
+      const meta = r.meta || {};
+      const dist = getDistance(meta.lat, meta.lng);
+
+      sheet.addRow({
+        date: moment(r.time).format('YYYY-MM-DD'),
+        time: moment(r.time).format('HH:mm:ss'),
+        name: u.name || 'Unknown',
+        email: u.email || '-',
+        division: u.division || '-',
+        role: u.role || '-',
+        action: r.action,
+        lat: meta.lat || 0,
+        lng: meta.lng || 0,
+        dist: dist,
+        qr: meta.qrToken || '-'
+      });
+    });
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename=attendance_export_${moment().format('YYYYMMDD_HHmm')}.xlsx`);
+
+    await workbook.xlsx.write(res);
+    res.end();
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).send('Error exporting data');
   }
 });
 
@@ -835,6 +1187,8 @@ app.get('/supervisor/attendance/export-user-month', ensureAuth, async (req, res)
       }
     }
 
+    const settings = await SystemSettings.findOne() || { holidays: [], saturdayWorkHours: 4 };
+
     const records = await Attendance.find({
       user: userId,
       time: { $gte: startOfMonth.toDate(), $lte: endOfMonth.toDate() }
@@ -954,12 +1308,44 @@ app.get('/supervisor/attendance/export-user-month', ensureAuth, async (req, res)
 
       // Conditional Formatting
       // 1. Work < 8h -> Red text
-      if (workHours < 8 && val.dayName !== 'Saturday' && val.dayName !== 'Sunday') { // Ignore weekend
-        row.getCell('work').font = { color: { argb: 'FFFF0000' } }; // Red
-        row.getCell('status').font = { color: { argb: 'FFFF0000' } };
-      } else if (workHours >= 8) {
-        row.getCell('work').font = { color: { argb: 'FF008000' } }; // Green
-        row.getCell('status').font = { color: { argb: 'FF008000' } };
+      // CHECK: is this day a working day for this user?
+      // val.dayName is eg 'Monday'. We need 0-6 index.
+      // JS getDay(): Sun=0, Mon=1...
+      const dateDayIndex = moment(key).day();
+
+      // Default [1..5] if not set
+      const userWorkDays = user.workingDays && user.workingDays.length > 0 ? user.workingDays : [1, 2, 3, 4, 5];
+      const isDayOfWeekWork = userWorkDays.includes(dateDayIndex);
+
+      // Check Holiday
+      // 'key' is YYYY-MM-DD
+      const isHoliday = settings.holidays && settings.holidays.includes(key);
+
+      const isWorkingDay = isDayOfWeekWork && !isHoliday;
+
+      if (!isWorkingDay) {
+        // If NOT a working day (or it IS a holiday)
+        if (workHours > 0) {
+          row.getCell('status').value = 'Overtime/Extra';
+        } else {
+          row.getCell('work').value = '-';
+          if (isHoliday) {
+            row.getCell('status').value = 'Holiday';
+            row.getCell('status').font = { color: { argb: 'FF9977' } }; // Light Orange
+          } else {
+            row.getCell('status').value = 'Off Day';
+            row.getCell('status').font = { color: { argb: 'FF999999' } }; // Grey
+          }
+        }
+      } else {
+        // Is a working day
+        if (workHours < 8) {
+          row.getCell('work').font = { color: { argb: 'FFFF0000' } }; // Red
+          row.getCell('status').font = { color: { argb: 'FFFF0000' } };
+        } else if (workHours >= 8) {
+          row.getCell('work').font = { color: { argb: 'FF008000' } }; // Green
+          row.getCell('status').font = { color: { argb: 'FF008000' } };
+        }
       }
 
       // 2. Break > 1h -> Red bg
@@ -1029,9 +1415,13 @@ app.post('/login', async (req, res) => {
   });
 });
 
-// ADMIN: create user
-app.post('/admin/create-user', ensureRole('Admin'), async (req, res) => {
-  const { name, email, role, division, secondaryDivision, password, canAccessSupervisorDashboard } = req.body;
+// ADMIN/HR: create user
+app.post('/admin/create-user', checkUserManagement, async (req, res) => {
+  const {
+    name, email, role, division, secondaryDivision,
+    password, canAccessSupervisorDashboard,
+    durationWorkHours, durationBreakMinutes, shiftGroup
+  } = req.body;
 
   let u = await User.findOne({ email });
   if (u) return res.redirect('/?msg=exists');
@@ -1045,19 +1435,30 @@ app.post('/admin/create-user', ensureRole('Admin'), async (req, res) => {
     division,
     secondaryDivision: secondaryDivision || undefined,
     canAccessSupervisorDashboard: canAccessSupervisorDashboard === 'on' || canAccessSupervisorDashboard === true,
-    durationWorkHours: 8,
-    durationBreakMinutes: 60,
+    durationWorkHours: durationWorkHours ? parseInt(durationWorkHours) : 8,
+    durationBreakMinutes: durationBreakMinutes ? parseInt(durationBreakMinutes) : 60,
+    shiftGroup: shiftGroup || undefined,
     password: hashed
   });
 
   await u.save();
+  await u.save();
+
+  const referer = req.get('Referer');
+  if (referer && referer.includes('/supervisor')) {
+    return res.redirect('/supervisor?msg=userCreated');
+  }
   res.redirect('/?msg=userCreated');
 });
 
-// ADMIN: update user
-app.post('/admin/update-user', ensureRole('Admin'), async (req, res) => {
+// ADMIN/HR: update user
+app.post('/admin/update-user', checkUserManagement, async (req, res) => {
   try {
-    const { userId, name, email, role, division, secondaryDivision, password, canAccessSupervisorDashboard } = req.body;
+    const {
+      userId, name, email, role, division, secondaryDivision,
+      password, canAccessSupervisorDashboard,
+      durationWorkHours, durationBreakMinutes, shiftGroup
+    } = req.body;
 
     const user = await User.findById(userId);
     if (!user) {
@@ -1070,12 +1471,22 @@ app.post('/admin/update-user', ensureRole('Admin'), async (req, res) => {
     user.division = division || 'OC';
     user.secondaryDivision = secondaryDivision || undefined;
     user.canAccessSupervisorDashboard = canAccessSupervisorDashboard === 'on' || canAccessSupervisorDashboard === true;
+    user.durationWorkHours = durationWorkHours ? parseInt(durationWorkHours) : 8;
+    user.durationBreakMinutes = durationBreakMinutes ? parseInt(durationBreakMinutes) : 60;
+    user.shiftGroup = shiftGroup || undefined;
 
     if (password && password.trim()) {
       user.password = await bcrypt.hash(password, 10);
     }
 
     await user.save();
+    await user.save();
+
+    // Redirect based on Referer or Origin
+    const referer = req.get('Referer');
+    if (referer && referer.includes('/supervisor')) {
+      return res.redirect('/supervisor?msg=userUpdated');
+    }
     res.redirect('/?msg=userUpdated');
   } catch (err) {
     console.error(err);
@@ -1083,8 +1494,8 @@ app.post('/admin/update-user', ensureRole('Admin'), async (req, res) => {
   }
 });
 
-// ADMIN: delete user + history
-app.post('/admin/delete-user', ensureRole('Admin'), async (req, res) => {
+// ADMIN/HR: delete user + history
+app.post('/admin/delete-user', checkUserManagement, async (req, res) => {
   try {
     const { userId } = req.body;
     if (!userId) {
@@ -1118,18 +1529,24 @@ app.post('/attendance/action', ensureAuth, async (req, res) => {
 
     // Validate Accuracy
     const acc = Number(accuracy);
-    // If accuracy is provided and > 100 meters, reject
+    // If accuracy is provided and > 500 meters, reject (Relaxed from 100m)
     // Note: Some browsers might not send accuracy, or send 0 if unknown. 
     // We only reject if it's explicitly bad.
-    if (accuracy && acc > 100) {
+    if (accuracy && acc > 500) {
       return res.status(400).json({
         error: `Location accuracy too low (${Math.round(acc)}m). Please wait for better GPS signal.`
       });
     }
 
-    const officeLat = Number(process.env.OFFICE_LAT || 0);
-    const officeLng = Number(process.env.OFFICE_LNG || 0);
-    const radius = Number(process.env.OFFICE_RADIUS_METERS || 100);
+    // Validasi Geofence (Server-side check)
+    // -------------------------------------
+    const settings = await SystemSettings.findOne();
+    const officeLat = settings ? settings.officeLat : Number(process.env.OFFICE_LAT || 0);
+    const officeLng = settings ? settings.officeLng : Number(process.env.OFFICE_LNG || 0);
+    const radius = settings ? settings.officeRadius : Number(process.env.OFFICE_RADIUS_METERS || 100);
+
+    console.log(`[Check-In Debug] Settings -> Lat: ${officeLat}, Lng: ${officeLng}, Radius: ${radius}m`);
+    console.log(`[Check-In Debug] User -> Lat: ${lat}, Lng: ${lng}`);
 
     function distanceMeters(lat1, lon1, lat2, lon2) {
       const R = 6371000;
@@ -1144,9 +1561,18 @@ app.post('/attendance/action', ensureAuth, async (req, res) => {
     }
 
     const dist = distanceMeters(officeLat, officeLng, Number(lat), Number(lng));
-    if (dist > radius) {
+    console.log(`[Check-In Debug] Calculated Distance: ${Math.round(dist)}m`);
+
+    // Strict for Check-In/Break-Start, Relaxed for Check-Out/Break-End
+    let allowedRadius = radius;
+    if (action === 'check-out' || action === 'break-end') {
+      // Allow up to 200m OR 5x radius for checking out (handles GPS drift or walking to parking lot)
+      allowedRadius = Math.max(radius * 5, 200);
+    }
+
+    if (dist > allowedRadius) {
       return res.status(400).json({
-        error: 'Out of allowed location. Distance: ' + Math.round(dist) + ' meters'
+        error: `Out of allowed location. Distance: ${Math.round(dist)}m (Allowed: ${allowedRadius}m)`
       });
     }
 
@@ -1189,6 +1615,318 @@ app.get('/admin/qr/current', ensureRole('Admin'), async (req, res) => {
   const token = await QRToken.getCurrent();
   const dataUrl = await qrcode.toDataURL(token.token);
   res.json({ token: token.token, dataUrl });
+});
+
+// ADMIN/HR: Update Saturday Shifts (Bulk)
+app.post('/admin/update-saturday-shifts', checkUserManagement, async (req, res) => {
+  try {
+    const { saturdayUsers } = req.body;
+    // saturdayUsers is array of IDs (or single ID string, or undefined if none)
+
+    let shiftIds = [];
+    if (saturdayUsers) {
+      if (Array.isArray(saturdayUsers)) shiftIds = saturdayUsers;
+      else shiftIds = [saturdayUsers];
+    }
+
+    // 1. Determine Scope (Admin vs HR)
+    let query = {};
+    if (req.user.role !== 'Admin') {
+      const divs = [];
+      // If "All Division", they effectively have global scope for this (or at least all staff)
+      const hasAll = req.user.division === 'All Division' || req.user.secondaryDivision === 'All Division';
+
+      if (!hasAll) {
+        if (req.user.division) divs.push(req.user.division);
+        if (req.user.secondaryDivision) divs.push(req.user.secondaryDivision);
+        query = { division: { $in: divs } };
+      }
+    }
+
+    const usersToUpdate = await User.find(query);
+
+    // 2. Iterate and update ONLY scoped users
+    const updates = usersToUpdate.map(async (u) => {
+      const worksSat = shiftIds.includes(u._id.toString());
+
+      // Base days: Mon(1) - Fri(5)
+      let newDays = [1, 2, 3, 4, 5];
+
+      if (worksSat) {
+        newDays.push(6); // Add Saturday
+      }
+
+      u.workingDays = newDays;
+      return u.save();
+    });
+
+    await Promise.all(updates);
+
+    // Redirect back to referring page if possible, or dashboard
+    const isSupervisor = req.user.role !== 'Admin';
+    // If user has 'All' check -> 'All'
+    // But actually, 'All' is a property of the USER not the selection.
+    // The selection UI helps setting the DB.
+    // Wait, the UI logic in 'selectShiftGroup' is purely client-side helper.
+    // The actual submission sends 'saturdayUsers' array.
+    // So we don't need to change anything here regarding logic, just the redirect.
+
+    const referer = req.get('Referer');
+    if (referer && referer.includes('/supervisor')) {
+      return res.redirect('/supervisor?msg=shiftsUpdated');
+    }
+    return res.redirect('/?msg=shiftsUpdated');
+
+  } catch (err) {
+    console.error(err);
+    res.redirect('/?msg=error');
+  }
+});
+
+// --- HOLIDAY ROUTES ---
+app.post('/admin/holidays/add', ensureAuth, ensureRole(['Admin', 'HR']), async (req, res) => {
+  try {
+    const { date } = req.body; // YYYY-MM-DD
+    if (date) {
+      let settings = await SystemSettings.findOne();
+      if (!settings) settings = new SystemSettings();
+      if (!settings.holidays) settings.holidays = [];
+
+      // Prevent duplicates
+      if (!settings.holidays.includes(date)) {
+        settings.holidays.push(date);
+        settings.holidays.sort(); // Keep sorted
+        await settings.save();
+      }
+    }
+    const referer = req.get('Referer');
+    res.redirect(referer || '/?msg=holidayAdded');
+  } catch (err) {
+    console.error(err);
+    res.redirect('/?msg=error');
+  }
+});
+
+app.post('/admin/holidays/remove', ensureAuth, ensureRole(['Admin', 'HR']), async (req, res) => {
+  try {
+    const { date } = req.body;
+    if (date) {
+      let settings = await SystemSettings.findOne();
+      if (settings) {
+        if (!settings.holidays) settings.holidays = [];
+        settings.holidays = settings.holidays.filter(h => h !== date);
+        await settings.save();
+      }
+    }
+    const referer = req.get('Referer');
+    res.redirect(referer || '/?msg=holidayRemoved');
+  } catch (err) {
+    console.error(err);
+    res.redirect('/?msg=error');
+  }
+});
+
+// Export Saturday History (User specific)
+app.get('/admin/attendance/export-saturday', ensureAuth, ensureRole(['Admin', 'HR', 'Supervisor']), async (req, res) => {
+  try {
+    const { userId, month } = req.query;
+    const user = await User.findById(userId);
+    if (!user) return res.status(404).send('User not found');
+
+    let query = { user: userId };
+    let monthLabel = "All Time";
+
+    // Filter by month if provided
+    if (month) {
+      const startOfMonth = moment(month, 'YYYY-MM').startOf('month').toDate();
+      const endOfMonth = moment(month, 'YYYY-MM').endOf('month').toDate();
+      query.time = { $gte: startOfMonth, $lte: endOfMonth };
+      monthLabel = moment(month, 'YYYY-MM').format('MMMM YYYY');
+    }
+
+    const records = await Attendance.find(query).sort({ time: 1 });
+
+    // FIX: Use ExcelJS, not excel
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet('Saturday Attendance');
+
+    // New Columns per request
+    worksheet.columns = [
+      { header: 'Date', key: 'date', width: 15 },
+      { header: 'Day', key: 'day', width: 12 },
+      { header: 'Check In', key: 'checkIn', width: 10 },
+      { header: 'Check Out', key: 'checkOut', width: 10 },
+      { header: 'Work (Hrs)', key: 'work', width: 15 },
+      { header: 'Break (Hrs)', key: 'break', width: 15 },
+      { header: 'Status', key: 'status', width: 12 }
+    ];
+
+    // Style the header
+    worksheet.getRow(1).font = { bold: true };
+
+    const recordsByDate = new Map();
+    records.forEach(r => {
+      const d = moment(r.time).format('YYYY-MM-DD');
+      if (!recordsByDate.has(d)) recordsByDate.set(d, []);
+      recordsByDate.get(d).push(r);
+    });
+
+    // Helper
+    const formatDuration = (sec) => {
+      const h = Math.floor(sec / 3600);
+      const m = Math.floor((sec % 3600) / 60);
+      const s = Math.floor(sec % 60);
+      return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+    };
+
+    const indonesianDays = ['Minggu', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
+
+    for (const [dateStr, recs] of recordsByDate) {
+      const dateObj = moment(dateStr);
+      if (dateObj.isoWeekday() !== 6) continue;
+
+      // Logic: Find events
+      const checkIn = recs.find(r => r.action === 'check-in' || r.type === 'CHECK_IN');
+      const checkOut = recs.find(r => r.action === 'check-out' || r.type === 'CHECK_OUT');
+
+      // Break calculation
+      let breakSeconds = 0;
+      const breakStarts = recs.filter(r => r.action === 'break-start');
+      const breakEnds = recs.filter(r => r.action === 'break-end');
+      // Simple pair matching (assuming orderly data for export)
+      for (let i = 0; i < Math.min(breakStarts.length, breakEnds.length); i++) {
+        breakSeconds += (new Date(breakEnds[i].time) - new Date(breakStarts[i].time)) / 1000;
+      }
+
+      let workStr = '-';
+      let breakStr = formatDuration(breakSeconds);
+      let status = 'Absent'; // Default
+      let isUnder = false;
+
+      if (checkIn) {
+        status = 'Working...';
+        if (checkOut) {
+          const grossDiff = (new Date(checkOut.time) - new Date(checkIn.time)) / 1000;
+          const netWork = grossDiff - breakSeconds; // Subtract break? Or just use gross? Adopting gross per previous logic usually.
+          // Actually User Image: Work 1:00:00, Break 00:00:00. 
+          // Work 00:23:35, Break 00:09:45.
+          // This implies Work is Net or Gross? Usually Net.
+          // I'll display Net Work.
+
+          workStr = formatDuration(netWork);
+
+          // Status Logic: e.g. < 4 hours on Saturday = Under?
+          // Using 4 hours (14400 sec) as hypothetical threshold
+          if (netWork < 14400) {
+            status = 'Under';
+            isUnder = true;
+          } else {
+            status = 'Present';
+          }
+        }
+      }
+
+      const row = worksheet.addRow({
+        date: dateStr,
+        day: indonesianDays[dateObj.day()],
+        checkIn: checkIn ? moment(checkIn.time).format('HH:mm') : '-',
+        checkOut: checkOut ? moment(checkOut.time).format('HH:mm') : '-',
+        work: workStr,
+        break: breakStr,
+        status: status
+      });
+
+      // Styling 'Work (Hrs)'
+      if (isUnder) {
+        row.getCell('work').font = { color: { argb: 'FFFF0000' } }; // Red
+      }
+    }
+
+    const safeName = user.name.replace(/[^a-zA-Z0-9]/g, '_');
+    const fileName = `saturday_attendance_${safeName}_${month || 'all'}.xlsx`;
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+    await workbook.xlsx.write(res);
+    res.end();
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).send('Error generating export');
+  }
+});
+
+// Update System Settings (Holidays, etc)
+app.post('/admin/update-settings', ensureRole('Admin'), async (req, res) => {
+  try {
+    const { saturdayWorkHours, officeRadiusMeters, holidayDates } = req.body;
+
+    let settings = await SystemSettings.findOne();
+    if (!settings) settings = new SystemSettings();
+
+    if (saturdayWorkHours) settings.saturdayWorkHours = parseFloat(saturdayWorkHours);
+    if (officeRadiusMeters) settings.officeRadius = parseFloat(officeRadiusMeters);
+
+    if (typeof holidayDates === 'string') {
+      // Expect format "YYYY-MM-DD, YYYY-MM-DD" or similar
+      // Split by comma or newline
+      const dates = holidayDates.split(/[\n,]+/).map(s => s.trim()).filter(s => s.match(/^\d{4}-\d{2}-\d{2}$/));
+      // Unique
+      settings.holidays = [...new Set(dates)].sort();
+    }
+
+    await settings.save();
+    res.redirect('/?msg=settingsUpdated');
+  } catch (err) {
+    console.error(err);
+    res.redirect('/?msg=error');
+  }
+});
+
+// Update Office Location Settings
+app.post('/admin/settings/update', ensureAuth, ensureRole('Admin'), async (req, res) => {
+  try {
+    const { officeLat, officeLng, officeRadius } = req.body;
+    let settings = await SystemSettings.findOne();
+    if (!settings) settings = new SystemSettings();
+
+    if (officeLat) settings.officeLat = parseFloat(officeLat);
+    if (officeLng) settings.officeLng = parseFloat(officeLng);
+    if (officeRadius) settings.officeRadius = parseFloat(officeRadius);
+
+    await settings.save();
+
+    // Sync with .env
+    try {
+      const fs = require('fs');
+      const envPath = path.join(__dirname, '.env');
+      if (fs.existsSync(envPath)) {
+        let envContent = fs.readFileSync(envPath, 'utf8');
+
+        const updateKey = (key, val) => {
+          const regex = new RegExp(`^${key}=.*`, 'm');
+          if (regex.test(envContent)) {
+            envContent = envContent.replace(regex, `${key}=${val}`);
+          } else {
+            envContent += `\n${key}=${val}`;
+          }
+        };
+
+        if (officeLat) updateKey('OFFICE_LAT', officeLat);
+        if (officeLng) updateKey('OFFICE_LNG', officeLng);
+        if (officeRadius) updateKey('OFFICE_RADIUS_METERS', officeRadius);
+
+        fs.writeFileSync(envPath, envContent);
+      }
+    } catch (envErr) {
+      console.error('Failed to update .env file:', envErr);
+    }
+
+    res.redirect('/admin?msg=settingsUpdated');
+  } catch (err) {
+    console.error(err);
+    res.redirect('/admin?msg=error');
+  }
 });
 
 // Ensure default admin
