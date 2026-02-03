@@ -511,7 +511,7 @@ app.get('/supervisor', ensureAuth, async (req, res) => {
       monthLabel: startOfMonth.format('MMMM YYYY'),
       memberSummaries,
       saturdaySummaries, // Pass Saturday data
-      canManageUsers: (req.user.role === 'Admin' || req.user.role === 'General Manager'), // GM/Admin can manage users
+      canManageUsers: (req.user.role === 'Admin' || req.user.role === 'General Manager' || ((req.user.role === 'Supervisor' || req.user.role === 'Operational Manager') && (req.user.division === 'HR' || req.user.secondaryDivision === 'HR'))),
       settings,
       isBusy: (statusObj.status === 'working' || statusObj.status === 'break'),
       statusText: statusObj.label
