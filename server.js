@@ -317,14 +317,16 @@ app.get('/', ensureAuth, async (req, res) => {
     currentBreakStart: currentBreakStart ? currentBreakStart.getTime() : null
   };
 
+  const settings = await SystemSettings.findOne(); // Fetch latest settings
+
   return res.render('user_home', {
     user: req.user,
     token,
     moment,
     office: {
-      lat: parseFloat(process.env.OFFICE_LAT || '0'),
-      lng: parseFloat(process.env.OFFICE_LNG || '0'),
-      radius: parseFloat(process.env.OFFICE_RADIUS_METERS || '100')
+      lat: settings ? settings.officeLat : parseFloat(process.env.OFFICE_LAT || '0'),
+      lng: settings ? settings.officeLng : parseFloat(process.env.OFFICE_LNG || '0'),
+      radius: settings ? settings.officeRadius : parseFloat(process.env.OFFICE_RADIUS_METERS || '100')
     },
     attendanceSummary,
     divisionMembers
