@@ -2101,14 +2101,7 @@ async function getDailyStats(userId, dateObj = moment()) {
   };
 }
 
-return {
-  workSeconds,
-  breakSeconds,
-  status,
-  currentWorkStart: currentWorkStart ? currentWorkStart.getTime() : null,
-  currentBreakStart: currentBreakStart ? currentBreakStart.getTime() : null
-};
-}
+
 
 // Start server
 mongoose.connect(process.env.MONGODB_URI, {
