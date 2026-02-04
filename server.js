@@ -2036,6 +2036,80 @@ async function getUserStatus(userId) {
   return { status: 'idle', label: '' };
 }
 
+// Helper: Get Daily Stats for a User (for Real-time monitoring)
+async function getDailyStats(userId, dateObj = moment()) {
+  const startOfDay = dateObj.clone().startOf('day').toDate();
+  const endOfDay = dateObj.clone().endOf('day').toDate();
+
+  const records = await Attendance.find({
+    user: userId,
+    time: { $gte: startOfDay, $lte: endOfDay }
+  }).sort({ time: 1 });
+
+  let workSeconds = 0;
+  let breakSeconds = 0;
+  let lastCheckIn = null;
+  let lastBreakStart = null;
+  const workIntervals = [];
+  const breakIntervals = [];
+
+  records.forEach(r => {
+    const t = r.time;
+    if (r.action === 'check-in') {
+      lastCheckIn = t;
+    } else if (r.action === 'check-out') {
+      if (lastCheckIn) {
+        workSeconds += (t - lastCheckIn) / 1000;
+        workIntervals.push({ start: lastCheckIn, end: t });
+        lastCheckIn = null;
+      }
+    } else if (r.action === 'break-start') {
+      if (lastCheckIn) {
+        workSeconds += (t - lastCheckIn) / 1000;
+        workIntervals.push({ start: lastCheckIn, end: t });
+        lastCheckIn = null;
+      }
+      lastBreakStart = t;
+    } else if (r.action === 'break-end') {
+      if (lastBreakStart) {
+        breakSeconds += (t - lastBreakStart) / 1000;
+        breakIntervals.push({ start: lastBreakStart, end: t });
+        lastBreakStart = null;
+      }
+      lastCheckIn = t;
+    }
+  });
+
+  let status = 'idle';
+  let currentWorkStart = null;
+  let currentBreakStart = null;
+
+  if (lastCheckIn) {
+    status = 'working';
+    currentWorkStart = lastCheckIn;
+  } else if (lastBreakStart) {
+    status = 'break';
+    currentBreakStart = lastBreakStart;
+  }
+
+  return {
+    workSeconds,
+    breakSeconds,
+    status,
+    currentWorkStart: currentWorkStart ? currentWorkStart.getTime() : null,
+    currentBreakStart: currentBreakStart ? currentBreakStart.getTime() : null
+  };
+}
+
+return {
+  workSeconds,
+  breakSeconds,
+  status,
+  currentWorkStart: currentWorkStart ? currentWorkStart.getTime() : null,
+  currentBreakStart: currentBreakStart ? currentBreakStart.getTime() : null
+};
+}
+
 // Start server
 mongoose.connect(process.env.MONGODB_URI, {
   useNewUrlParser: true,
@@ -2043,71 +2117,7 @@ mongoose.connect(process.env.MONGODB_URI, {
 }).then(async () => {
   console.log("✅ MongoDB connected");
   await ensureDefaultAdmin();
-  // Helper: Get Daily Stats for a User (for Real-time monitoring)
-  async function getDailyStats(userId, dateObj = moment()) {
-    const startOfDay = dateObj.clone().startOf('day').toDate();
-    const endOfDay = dateObj.clone().endOf('day').toDate();
-
-    const records = await Attendance.find({
-      user: userId,
-      time: { $gte: startOfDay, $lte: endOfDay }
-    }).sort({ time: 1 });
-
-    let workSeconds = 0;
-    let breakSeconds = 0;
-    let lastCheckIn = null;
-    let lastBreakStart = null;
-    const workIntervals = [];
-    const breakIntervals = [];
-
-    records.forEach(r => {
-      const t = r.time;
-      if (r.action === 'check-in') {
-        lastCheckIn = t;
-      } else if (r.action === 'check-out') {
-        if (lastCheckIn) {
-          workSeconds += (t - lastCheckIn) / 1000;
-          workIntervals.push({ start: lastCheckIn, end: t });
-          lastCheckIn = null;
-        }
-      } else if (r.action === 'break-start') {
-        if (lastCheckIn) {
-          workSeconds += (t - lastCheckIn) / 1000;
-          workIntervals.push({ start: lastCheckIn, end: t });
-          lastCheckIn = null;
-        }
-        lastBreakStart = t;
-      } else if (r.action === 'break-end') {
-        if (lastBreakStart) {
-          breakSeconds += (t - lastBreakStart) / 1000;
-          breakIntervals.push({ start: lastBreakStart, end: t });
-          lastBreakStart = null;
-        }
-        lastCheckIn = t;
-      }
-    });
-
-    let status = 'idle';
-    let currentWorkStart = null;
-    let currentBreakStart = null;
-
-    if (lastCheckIn) {
-      status = 'working';
-      currentWorkStart = lastCheckIn;
-    } else if (lastBreakStart) {
-      status = 'break';
-      currentBreakStart = lastBreakStart;
-    }
-
-    return {
-      workSeconds,
-      breakSeconds,
-      status,
-      currentWorkStart: currentWorkStart ? currentWorkStart.getTime() : null,
-      currentBreakStart: currentBreakStart ? currentBreakStart.getTime() : null
-    };
-  }
-
   // Start server
   app.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`));
+
 }).catch(err => console.error("MongoDB connection error:", err));
