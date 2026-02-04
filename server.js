@@ -503,6 +503,7 @@ app.get('/supervisor', ensureAuth, async (req, res) => {
       memberSummaries.push({
         user: m,
         workSeconds,
+        workText: formatDuration(workSeconds), // Fix: Add formatted duration
         todayStats, // New realtime data
         saturdayHoursStr: m.saturdayHoursStr,
         hasSaturdayAttendance: m.hasSaturdayAttendance

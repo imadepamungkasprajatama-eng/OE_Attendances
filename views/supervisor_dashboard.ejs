@@ -321,10 +321,10 @@
               <th class="ps-3 border-0 rounded-start">Name</th>
               <th class="border-0">Email</th>
               <th class="border-0">Division</th>
-              <th class="border-0">Total Hours</th>
-              <th class="pe-3 border-0 rounded-end text-end">Report</th>
+              <th class="border-0 text-center">Total Hours</th>
+              <th class="border-0 text-center">Report</th>
               <% if (canManageUsers) { %>
-                <th class="border-0 text-center">Actions</th>
+                <th class="border-0 text-center rounded-end pe-3">Actions</th>
                 <% } %>
             </tr>
           </thead>
@@ -343,12 +343,12 @@
                       <%= ms.user.division || '-' %>
                     </span>
                   </td>
-                  <td>
+                  <td class="text-center">
                     <span class="d-inline-block px-2 py-1 rounded bg-light fw-bold text-dark">
                       <%= ms.workText %>
                     </span>
                   </td>
-                  <td class="text-end pe-3">
+                  <td class="text-center">
                     <form method="GET" action="/supervisor/attendance/export-user-month" class="d-inline">
                       <input type="hidden" name="userId" value="<%= ms.user._id %>">
                       <input type="hidden" name="month" value="<%= monthParam %>">
@@ -358,7 +358,7 @@
                     </form>
                   </td>
                   <% if (canManageUsers) { %>
-                    <td class="text-center pe-3 text-end">
+                    <td class="text-center pe-3">
                       <button class="btn btn-sm btn-icon btn-white border shadow-sm me-1" data-bs-toggle="modal"
                         data-bs-target="#editUserModal" data-mode="edit" data-id="<%= ms.user._id %>"
                         data-name="<%= ms.user.name %>" data-email="<%= ms.user.email %>"
