@@ -526,7 +526,11 @@ app.get('/supervisor', ensureAuth, async (req, res) => {
 // ADMIN DASHBOARD
 app.get('/admin', ensureRole('Admin'), async (req, res) => {
   try {
-    const settings = await SystemSettings.findOne() || {};
+    const settings = await SystemSettings.findOne() || {
+      officeLat: parseFloat(process.env.OFFICE_LAT || '0'),
+      officeLng: parseFloat(process.env.OFFICE_LNG || '0'),
+      officeRadius: parseFloat(process.env.OFFICE_RADIUS_METERS || '100')
+    };
     const selectedMonth = req.query.month || moment().format('YYYY-MM');
     const startOfMonth = moment(selectedMonth + '-01', 'YYYY-MM').startOf('month');
     const endOfMonth = startOfMonth.clone().endOf('month');
