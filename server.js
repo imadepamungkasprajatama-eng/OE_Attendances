@@ -34,7 +34,10 @@ app.use(session({
   secret: process.env.SESSION_SECRET || 'secret',
   resave: false,
   saveUninitialized: false,
-  store: MongoStore.create({ mongoUrl: process.env.MONGODB_URI })
+  store: MongoStore.create({
+    mongoUrl: process.env.MONGODB_URI,
+    autoRemove: 'native' // Fix for "Unable to find the session to touch"
+  })
 }));
 
 app.use(passport.initialize());
@@ -293,14 +296,41 @@ app.get('/', ensureAuth, async (req, res) => {
       }
     });
 
+    // --- TODAY'S OVERVIEW LOGIC (Admin sees all, but can filter) ---
+    // 1. Managed Divisions (Admin manages everything)
+    const managedDivisions = ['OC', 'N1', 'SnG', 'e1', 'CE', 'EC', 'PX', 'FN', 'HR', 'GM'];
+
+    // 2. Active Division (Filter)
+    let activeDivision = req.query.division;
+    if (!activeDivision || !managedDivisions.includes(activeDivision)) {
+      activeDivision = 'OC'; // Default to OC if not specified
+    }
+
+    // 3. Fetch Members of Active Division
+    const divisionMembers = await User.find({ division: activeDivision }).sort({ name: 1 });
+
+    // 4. Calculate Daily Stats
+    const memberSummaries = [];
+    for (const member of divisionMembers) {
+      const stats = await getDailyStats(member._id);
+      memberSummaries.push({
+        user: member,
+        todayStats: stats
+      });
+    }
+
     return res.render('admin_dashboard', {
       user: req.user,
       users,
-      token, // Kept token name as per original
+      token,
       settings,
       moment,
-      selectedMonth, // Pass filter
-      query: req.query // Kept query
+      selectedMonth,
+      query: req.query,
+      // New Data for Today's Overview
+      managedDivisions,
+      division: activeDivision,
+      memberSummaries
     });
   }
 
@@ -386,7 +416,7 @@ app.get('/supervisor', ensureAuth, async (req, res) => {
 
     // Check for 'All Division' access
     if (managedDivisions.includes('All Division')) {
-      managedDivisions = ['OC', 'N1', 'SnG', 'e1', 'CE', 'EC', 'PX', 'FN', 'HR'];
+      managedDivisions = ['OC', 'N1', 'SnG', 'e1', 'CE', 'EC', 'PX', 'FN', 'HR', 'GM'];
     }
 
     managedDivisions = [...new Set(managedDivisions)];

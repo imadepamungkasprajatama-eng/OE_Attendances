@@ -166,7 +166,7 @@
                 <div class="d-flex gap-2">
                   <button class="btn btn-outline-dark rounded-pill" data-bs-toggle="modal"
                     data-bs-target="#scheduleModal">
-                    <i class="fas fa-calendar-alt me-1"></i> Staff Schedule
+                    <i class="fas fa-calendar-alt me-1"></i> Employee Overview
                   </button>
                   <button class="btn btn-primary rounded-pill px-4" data-bs-toggle="modal"
                     data-bs-target="#editUserModal" onclick="window.prepareCreateUser()">
@@ -191,7 +191,7 @@
                   <div class="modal-content border-0 shadow-lg" style="border-radius: 1rem;">
                     <div class="modal-header border-0 pb-0">
                       <div>
-                        <h5 class="modal-title fw-bold">Staff Schedule Management</h5>
+                        <h5 class="modal-title fw-bold">Employee Overview Management</h5>
                       </div>
                       <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
                     </div>
@@ -199,8 +199,12 @@
 
                       <ul class="nav nav-pills mb-3" id="pills-tab" role="tablist">
                         <li class="nav-item" role="presentation">
-                          <button class="nav-link active" id="pills-sat-tab" data-bs-toggle="pill"
-                            data-bs-target="#pills-sat" type="button" role="tab">Saturday Attendance</button>
+                          <button class="nav-link active" id="pills-today-tab" data-bs-toggle="pill"
+                            data-bs-target="#pills-today" type="button" role="tab">Today's Overview</button>
+                        </li>
+                        <li class="nav-item" role="presentation">
+                          <button class="nav-link" id="pills-sat-tab" data-bs-toggle="pill" data-bs-target="#pills-sat"
+                            type="button" role="tab">Saturday Attendance</button>
                         </li>
                         <li class="nav-item" role="presentation">
                           <button class="nav-link" id="pills-hols-tab" data-bs-toggle="pill"
@@ -209,8 +213,89 @@
                       </ul>
 
                       <div class="tab-content" id="pills-tabContent">
+                        <!-- TAB 0: TODAY'S OVERVIEW (New) -->
+                        <div class="tab-pane fade show active" id="pills-today" role="tabpanel">
+                          <!-- Division Selector & Controls -->
+                          <form action="/" method="GET" class="mb-3 d-flex align-items-center gap-2">
+                            <label class="fw-bold small text-muted">Division:</label>
+                            <select name="division" class="form-select form-select-sm" style="width: auto;"
+                              onchange="this.form.submit()">
+                              <% managedDivisions.forEach(div=> { %>
+                                <option value="<%= div %>" <%=division===div ? 'selected' : '' %>><%= div %>
+                                </option>
+                                <% }) %>
+                            </select>
+                            <input type="hidden" name="month" value="<%= selectedMonth %>">
+                            <input type="hidden" name="openModal" value="true">
+                            <button type="submit" class="btn btn-sm btn-outline-primary">Refresh</button>
+                          </form>
+
+                          <div class="table-responsive" style="max-height: 400px; overflow-y: auto;">
+                            <table class="table table-hover align-middle">
+                              <thead class="bg-light sticky-top">
+                                <tr>
+                                  <th>Name</th>
+                                  <th>Division</th>
+                                  <th>Status</th>
+                                  <th>Work Timer</th>
+                                  <th>Break Timer</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                <% memberSummaries.forEach(summary=> { %>
+                                  <tr>
+                                    <td>
+                                      <div class="d-flex align-items-center">
+                                        <div
+                                          class="bg-light rounded-circle d-flex align-items-center justify-content-center me-2"
+                                          style="width: 32px; height: 32px; font-weight: bold; color: #555;">
+                                          <%= summary.user.name.charAt(0).toUpperCase() %>
+                                        </div>
+                                        <div>
+                                          <div class="fw-bold">
+                                            <%= summary.user.name %>
+                                          </div>
+                                          <small class="text-muted">
+                                            <%= summary.user.email %>
+                                          </small>
+                                        </div>
+                                      </div>
+                                    </td>
+                                    <td><span class="badge bg-light text-dark border">
+                                        <%= summary.user.division %>
+                                      </span></td>
+                                    <td>
+                                      <% if (summary.todayStats.status==='working' ) { %>
+                                        <span class="badge bg-success">Working</span>
+                                        <% } else if (summary.todayStats.status==='break' ) { %>
+                                          <span class="badge bg-warning">Break</span>
+                                          <% } else { %>
+                                            <span class="badge bg-secondary">Idle</span>
+                                            <% } %>
+                                    </td>
+                                    <td>
+                                      <span class="live-timer-work"
+                                        data-base-seconds="<%= summary.todayStats.workSeconds %>"
+                                        data-start-time="<%= summary.todayStats.currentWorkStart ? summary.todayStats.currentWorkStart.getTime() : '' %>">
+                                        <%= summary.todayStats.workText %>
+                                      </span>
+                                    </td>
+                                    <td>
+                                      <span class="live-timer-break"
+                                        data-base-seconds="<%= summary.todayStats.breakSeconds %>"
+                                        data-start-time="<%= summary.todayStats.currentBreakStart ? summary.todayStats.currentBreakStart.getTime() : '' %>">
+                                        <%= summary.todayStats.breakText %>
+                                      </span>
+                                    </td>
+                                  </tr>
+                                  <% }) %>
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+
                         <!-- TAB 1: Saturday Attendance (Report) -->
-                        <div class="tab-pane fade show active" id="pills-sat" role="tabpanel">
+                        <div class="tab-pane fade" id="pills-sat" role="tabpanel">
 
                           <form action="/" method="GET" class="mb-3 d-flex align-items-center gap-2">
                             <input type="hidden" name="openModal" value="true">
@@ -455,7 +540,8 @@
               <div class="mb-3">
                 <div class="d-flex justify-content-between">
                   <label class="form-label small fw-bold text-muted">Secondary Division (Optional)</label>
-                  <button type="button" class="btn btn-link btn-sm p-0 text-decoration-none" id="addDivisionBtn">+
+                  <button type="button" class="btn btn-link btn-sm p-0 text-decoration-none" id="addDivisionBtn"
+                    onclick="document.getElementById('secondaryDivisionWrapper').classList.remove('d-none'); document.getElementById('secondaryDivisionWrapper').style.display='block';">+
                     Add</button>
                 </div>
                 <div class="d-none" id="secondaryDivisionWrapper">
@@ -500,29 +586,32 @@
 
       <script>
         // Generate QR
-        document.getElementById('gen-qr').addEventListener('click', async () => {
-          const res = await fetch('/admin/generate-qr', { method: 'POST' });
-          const data = await res.json();
-          if (data.dataUrl) {
-            const container = document.getElementById('qr-area');
-            const btn = document.getElementById('gen-qr');
+        const genQrBtn = document.getElementById('gen-qr');
+        if (genQrBtn) {
+          genQrBtn.addEventListener('click', async () => {
+            const res = await fetch('/admin/generate-qr', { method: 'POST' });
+            const data = await res.json();
+            if (data.dataUrl) {
+              const container = document.getElementById('qr-area');
+              const btn = document.getElementById('gen-qr');
 
-            // Hide button, show container
-            btn.classList.add('d-none');
-            container.classList.remove('d-none');
+              // Hide button, show container
+              btn.classList.add('d-none');
+              container.classList.remove('d-none');
 
-            container.innerHTML =
-              '<div class="bg-light p-3 rounded-3 d-inline-block mb-3">' +
-              '<img src="' + data.dataUrl + '" id="generated-qr-img" class="img-fluid" style="max-width:200px">' +
-              '</div>' +
-              '<p class="small text-muted text-monospace mb-2 text-break">token: ' + data.token.slice(0, 30) + '...</p>' +
-              '<button id="download-qr-btn" class="btn btn-sm btn-outline-primary rounded-pill px-3">Download QR</button>';
+              container.innerHTML =
+                '<div class="bg-light p-3 rounded-3 d-inline-block mb-3">' +
+                '<img src="' + data.dataUrl + '" id="generated-qr-img" class="img-fluid" style="max-width:200px">' +
+                '</div>' +
+                '<p class="small text-muted text-monospace mb-2 text-break">token: ' + data.token.slice(0, 30) + '...</p>' +
+                '<button id="download-qr-btn" class="btn btn-sm btn-outline-primary rounded-pill px-3">Download QR</button>';
 
-            setupDownloadBtn(data.dataUrl);
-          } else {
-            alert('No QR returned');
-          }
-        });
+              setupDownloadBtn(data.dataUrl);
+            } else {
+              alert('No QR returned');
+            }
+          });
+        }
 
         function setupDownloadBtn(dataUrl) {
           const btn = document.getElementById('download-qr-btn');
@@ -613,13 +702,19 @@
           if (modalEl) {
             modalEl.addEventListener('show.bs.modal', function (event) {
               const button = event.relatedTarget;
-              if (!button) return;
+              if (!button) {
+                console.error("Modal triggered but no relatedTarget found");
+                return;
+              }
               const mode = button.getAttribute('data-mode');
+              console.log("[Modal Debug] Mode:", mode);
 
               if (mode === 'edit') {
                 const id = button.getAttribute('data-id');
                 const name = button.getAttribute('data-name') || '';
                 const email = button.getAttribute('data-email') || '';
+                console.log("[Modal Debug] Editing:", { id, name, email });
+
                 const role = button.getAttribute('data-role') || 'Staff';
                 const division = button.getAttribute('data-division') || 'OC';
                 const secondaryDivision = button.getAttribute('data-secondary-division') || '';
@@ -664,9 +759,15 @@
             });
 
             if (addDivisionBtn && secondaryDivisionWrapper) {
+              console.log("[Admin Debug] Add Division Button Found");
               addDivisionBtn.addEventListener('click', function () {
+                console.log("[Admin Debug] Add Division Clicked");
                 secondaryDivisionWrapper.classList.remove('d-none');
+                secondaryDivisionWrapper.style.display = 'block'; // Force show
+                this.style.display = 'none'; // Optional: hide the "+ Add" button after clicking? No, maybe user wants to toggle (logic doesn't support toggle yet)
               });
+            } else {
+              console.error("[Admin Debug] Add Division Elements Missing", { btn: !!addDivisionBtn, wrapper: !!secondaryDivisionWrapper });
             }
           }
         })();
@@ -807,5 +908,41 @@
           });
         </script>
         <% } %>
+
+          <!-- Real-Time Timer Script (Admin) -->
+          <script>
+            function formatDuration(totalSeconds) {
+              const h = Math.floor(totalSeconds / 3600);
+              const m = Math.floor((totalSeconds % 3600) / 60);
+              const s = Math.floor(totalSeconds % 60);
+              return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+            }
+
+            setInterval(() => {
+              const now = Date.now();
+
+              // Update Work Timers
+              document.querySelectorAll('.live-timer-work').forEach(el => {
+                const baseSeconds = parseInt(el.getAttribute('data-base-seconds') || '0');
+                const startTimeStr = el.getAttribute('data-start-time');
+                if (startTimeStr) {
+                  const startTime = parseInt(startTimeStr);
+                  const elapsed = Math.floor((now - startTime) / 1000);
+                  el.textContent = formatDuration(baseSeconds + elapsed);
+                }
+              });
+
+              // Update Break Timers
+              document.querySelectorAll('.live-timer-break').forEach(el => {
+                const baseSeconds = parseInt(el.getAttribute('data-base-seconds') || '0');
+                const startTimeStr = el.getAttribute('data-start-time');
+                if (startTimeStr) {
+                  const startTime = parseInt(startTimeStr);
+                  const elapsed = Math.floor((now - startTime) / 1000);
+                  el.textContent = formatDuration(baseSeconds + elapsed);
+                }
+              });
+            }, 1000);
+          </script>
 
           <%- include('partials/footer') %>
