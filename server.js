@@ -398,12 +398,18 @@ app.get('/supervisor', ensureAuth, async (req, res) => {
       activeDivision = managedDivisions.includes(requested) ? requested : managedDivisions[0];
     }
 
+    console.log(`[Supervisor Debug] User: ${req.user.email}, Role: ${req.user.role}, Div: ${req.user.division}`);
+    console.log(`[Supervisor Debug] Managed: ${JSON.stringify(managedDivisions)}`);
+    console.log(`[Supervisor Debug] Active Division: ${activeDivision}`);
+
     const startOfMonth = moment(monthParam + '-01', 'YYYY-MM-DD').startOf('month');
     const endOfMonth = startOfMonth.clone().endOf('month');
 
     const members = activeDivision
       ? await User.find({ division: activeDivision }).sort({ name: 1 })
       : [];
+
+    console.log(`[Supervisor Debug] Members found in ${activeDivision}: ${members.length}`);
 
     // Fetch all members for Saturday Report (ignoring activeDivision filter)
     const saturdayMembers = (managedDivisions.length > 0)
