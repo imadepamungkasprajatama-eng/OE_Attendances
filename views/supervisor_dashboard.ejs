@@ -73,7 +73,11 @@
                         <div class="modal-body">
                           <ul class="nav nav-pills mb-3" id="pills-tab-sup" role="tablist">
                             <li class="nav-item" role="presentation">
-                              <button class="nav-link active" id="pills-sat-tab-sup" data-bs-toggle="pill"
+                              <button class="nav-link active" id="pills-daily-tab-sup" data-bs-toggle="pill"
+                                data-bs-target="#pills-daily-sup" type="button" role="tab">Today's Overview</button>
+                            </li>
+                            <li class="nav-item" role="presentation">
+                              <button class="nav-link" id="pills-sat-tab-sup" data-bs-toggle="pill"
                                 data-bs-target="#pills-sat-sup" type="button" role="tab">Saturday Attendance</button>
                             </li>
                             <li class="nav-item" role="presentation">
@@ -82,7 +86,104 @@
                             </li>
                           </ul>
                           <div class="tab-content" id="pills-tabContent-sup">
-                            <div class="tab-pane fade show active" id="pills-sat-sup" role="tabpanel">
+                            <!-- DAILY STATS TAB -->
+                            <div class="tab-pane fade show active" id="pills-daily-sup" role="tabpanel">
+                              <div class="d-flex justify-content-between align-items-center mb-3">
+                                <h6 class="mb-0 text-muted">Real-Time Daily Stats (<%= moment().format('DD MMM YYYY') %>
+                                    )</h6>
+                                <form action="/supervisor" method="GET">
+                                  <% if(typeof division !=='undefined' && division) { %>
+                                    <input type="hidden" name="division" value="<%= division %>">
+                                    <% } %>
+                                      <input type="hidden" name="openModal" value="true">
+                                      <button type="submit" class="btn btn-sm btn-outline-primary">
+                                        <i class="fas fa-sync-alt me-1"></i> Refresh
+                                      </button>
+                                </form>
+                              </div>
+
+                              <div class="table-responsive" style="max-height: 400px; overflow-y: auto;">
+                                <% // Group by Division const groupedStats={}; dailyStats.forEach(stat=> {
+                                  const divName = stat.division || 'Unassigned';
+                                  if(!groupedStats[divName]) groupedStats[divName] = [];
+                                  groupedStats[divName].push(stat);
+                                  });
+                                  const sortedDivisions = Object.keys(groupedStats).sort();
+                                  %>
+
+                                  <% sortedDivisions.forEach(divName=> { %>
+                                    <div
+                                      class="bg-light px-3 py-2 border-top border-bottom fw-bold text-dark mt-2 mb-1">
+                                      Division: <%= divName %>
+                                    </div>
+                                    <table class="table table-sm table-hover align-middle mb-0">
+                                      <thead>
+                                        <tr>
+                                          <th style="width: 30%;">Name</th>
+                                          <th style="width: 25%;">Check In / Out</th>
+                                          <th style="width: 20%;">Work Timer</th>
+                                          <th style="width: 20%;">Break Timer</th>
+                                          <th style="width: 5%;">Status</th>
+                                        </tr>
+                                      </thead>
+                                      <tbody>
+                                        <% groupedStats[divName].forEach(stat=> { %>
+                                          <tr>
+                                            <td>
+                                              <div class="fw-bold">
+                                                <%= stat.user.name %>
+                                              </div>
+                                              <div class="small text-muted">
+                                                <%= stat.user.email %>
+                                              </div>
+                                            </td>
+                                            <td>
+                                              <% if(stat.currentWorkStart) { %>
+                                                <span class="badge bg-success">In: <%=
+                                                    moment(stat.currentWorkStart).format('HH:mm') %></span>
+                                                <% } else { %>
+                                                  <span class="text-muted small">-</span>
+                                                  <% } %>
+                                            </td>
+                                            <td>
+                                              <!-- Real-time Work Timer -->
+                                              <span class="realtime-timer fw-bold text-primary" data-type="work"
+                                                data-base="<%= stat.workSeconds %>"
+                                                data-start="<%= stat.currentWorkStart || '' %>">
+                                                <%= stat.workText %>
+                                              </span>
+                                            </td>
+                                            <td>
+                                              <!-- Real-time Break Timer -->
+                                              <span class="realtime-timer fw-bold text-warning" data-type="break"
+                                                data-base="<%= stat.breakSeconds %>"
+                                                data-start="<%= stat.currentBreakStart || '' %>">
+                                                <%= stat.breakText %>
+                                              </span>
+                                            </td>
+                                            <td>
+                                              <% if(stat.status==='working' ) { %>
+                                                <span class="badge bg-success rounded-pill">Working</span>
+                                                <% } else if(stat.status==='break' ) { %>
+                                                  <span class="badge bg-warning text-dark rounded-pill">Break</span>
+                                                  <% } else { %>
+                                                    <span class="badge bg-secondary rounded-pill">Idle</span>
+                                                    <% } %>
+                                            </td>
+                                          </tr>
+                                          <% }) %>
+                                      </tbody>
+                                    </table>
+                                    <% }) %>
+
+                                      <% if(dailyStats.length===0) { %>
+                                        <p class="text-center text-muted my-4">No staff found.</p>
+                                        <% } %>
+                              </div>
+                            </div>
+
+                            <!-- SATURDAY TAB (Moved) -->
+                            <div class="tab-pane fade" id="pills-sat-sup" role="tabpanel">
                               <form action="/supervisor" method="GET" class="mb-3 d-flex align-items-center gap-2">
                                 <% if(typeof division !=='undefined' && division) { %>
                                   <input type="hidden" name="division" value="<%= division %>">
@@ -499,10 +600,49 @@
           <% if (typeof query !=='undefined' && query.openModal) { %>
             <script>
               document.addEventListener('DOMContentLoaded', function () {
-                var myModal = new bootstrap.Modal(document.getElementById('scheduleModal'));
-                myModal.show();
+                console.log("Auto-opening modal...");
+                var modalEl = document.getElementById('scheduleModal');
+                if (modalEl) {
+                  var myModal = new bootstrap.Modal(modalEl);
+                  myModal.show();
+                } else {
+                  console.error("Modal element not found!");
+                }
               });
             </script>
             <% } %>
 
               <%- include('partials/footer') %>
+
+                <script>
+                  // Real-time Timer Logic for Supervisor Modal
+                  setInterval(() => {
+                    const timers = document.querySelectorAll('.realtime-timer');
+                    const now = Date.now();
+
+                    timers.forEach(timer => {
+                      const start = timer.getAttribute('data-start'); // Timestamp (ms)
+                      const base = parseFloat(timer.getAttribute('data-base') || 0); // Seconds
+
+                      if (start) {
+                        const startTime = parseInt(start);
+                        const elapsedSeconds = (now - startTime) / 1000;
+                        const totalSeconds = base + elapsedSeconds;
+                        timer.innerText = formatDuration(totalSeconds);
+                      } else {
+                        // Not active, just show base
+                        // (Optional: logic to fix drifting if needed, but base is static here)
+                      }
+                    });
+                  }, 1000);
+
+                  function formatDuration(sec) {
+                    sec = Math.floor(sec);
+                    if (sec < 0) sec = 0;
+                    const h = Math.floor(sec / 3600);
+                    const m = Math.floor((sec % 3600) / 60);
+                    const s = sec % 60;
+                    const pad = n => n.toString().padStart(2, '0');
+                    return `${pad(h)}:${pad(m)}:${pad(s)}`;
+                  }
+                </script>
