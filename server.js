@@ -139,6 +139,87 @@ function checkUserManagement(req, res, next) {
   return res.status(403).send('Forbidden: HR Access Required');
 }
 
+// Helper: Format Seconds to HH:mm:ss
+function formatDuration(sec) {
+  sec = Math.floor(sec);
+  if (sec < 0) sec = 0;
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = sec % 60;
+  const pad = n => n.toString().padStart(2, '0');
+  return `${pad(h)}:${pad(m)}:${pad(s)}`;
+}
+
+// Helper: Get Real-Time Daily Stats
+async function getDailyStats(userId) {
+  const today = moment();
+  const startOfDay = today.clone().startOf('day').toDate();
+  const endOfDay = today.clone().endOf('day').toDate();
+
+  const records = await Attendance.find({
+    user: userId,
+    time: { $gte: startOfDay, $lte: endOfDay }
+  }).sort({ time: 1 });
+
+  let workSeconds = 0;
+  let breakSeconds = 0;
+  let lastCheckIn = null;
+  let lastBreakStart = null;
+  const workIntervals = [];
+  const breakIntervals = [];
+
+  records.forEach(r => {
+    const t = r.time;
+    if (r.action === 'check-in') {
+      lastCheckIn = t;
+    } else if (r.action === 'check-out') {
+      if (lastCheckIn) {
+        workSeconds += (t - lastCheckIn) / 1000;
+        workIntervals.push({ start: lastCheckIn, end: t });
+        lastCheckIn = null;
+      }
+    } else if (r.action === 'break-start') {
+      if (lastCheckIn) {
+        workSeconds += (t - lastCheckIn) / 1000;
+        workIntervals.push({ start: lastCheckIn, end: t });
+        lastCheckIn = null;
+      }
+      lastBreakStart = t;
+    } else if (r.action === 'break-end') {
+      if (lastBreakStart) {
+        breakSeconds += (t - lastBreakStart) / 1000;
+        breakIntervals.push({ start: lastBreakStart, end: t });
+        lastBreakStart = null;
+      }
+      lastCheckIn = t;
+    }
+  });
+
+  let status = 'idle';
+  let currentWorkStart = null;
+  let currentBreakStart = null;
+
+  if (lastCheckIn) {
+    status = 'working';
+    currentWorkStart = lastCheckIn;
+  } else if (lastBreakStart) {
+    status = 'break';
+    currentBreakStart = lastBreakStart;
+  }
+
+  return {
+    workSeconds,
+    breakSeconds,
+    workText: formatDuration(workSeconds),
+    breakText: formatDuration(breakSeconds),
+    workIntervals,
+    breakIntervals,
+    status,
+    currentWorkStart,
+    currentBreakStart
+  };
+}
+
 // ====== ROUTES ======
 
 // HOME: Admin -> admin_dashboard, lainnya -> user_home
@@ -238,83 +319,26 @@ app.get('/', ensureAuth, async (req, res) => {
   const startOfDay = today.clone().startOf('day').toDate();
   const endOfDay = today.clone().endOf('day').toDate();
 
-  const records = await Attendance.find({
-    user: req.user._id,
-    time: { $gte: startOfDay, $lte: endOfDay }
-  }).sort({ time: 1 });
-
-  let workSeconds = 0;
-  let breakSeconds = 0;
-  let lastCheckIn = null;
-  let lastBreakStart = null;
-  const workIntervals = [];
-  const breakIntervals = [];
-
-  records.forEach(r => {
-    const t = r.time;
-    if (r.action === 'check-in') {
-      lastCheckIn = t;
-    } else if (r.action === 'check-out') {
-      if (lastCheckIn) {
-        workSeconds += (t - lastCheckIn) / 1000;
-        workIntervals.push({ start: lastCheckIn, end: t });
-        lastCheckIn = null;
-      }
-    } else if (r.action === 'break-start') {
-      if (lastCheckIn) {
-        workSeconds += (t - lastCheckIn) / 1000;
-        workIntervals.push({ start: lastCheckIn, end: t });
-        lastCheckIn = null;
-      }
-      lastBreakStart = t;
-    } else if (r.action === 'break-end') {
-      if (lastBreakStart) {
-        breakSeconds += (t - lastBreakStart) / 1000;
-        breakIntervals.push({ start: lastBreakStart, end: t });
-        lastBreakStart = null;
-      }
-      lastCheckIn = t;
-    }
-  });
-
-  let status = 'idle';
-  let currentWorkStart = null;
-  let currentBreakStart = null;
-
-  if (lastCheckIn) {
-    status = 'working';
-    currentWorkStart = lastCheckIn;
-  } else if (lastBreakStart) {
-    status = 'break';
-    currentBreakStart = lastBreakStart;
-  }
-
-  function formatDuration(sec) {
-    sec = Math.floor(sec);
-    const h = Math.floor(sec / 3600);
-    const m = Math.floor((sec % 3600) / 60);
-    const s = sec % 60;
-    const pad = n => n.toString().padStart(2, '0');
-    return `${pad(h)}:${pad(m)}:${pad(s)}`;
-  }
+  // Attendance hari ini (Using Helper)
+  const stats = await getDailyStats(req.user._id);
 
   const attendanceSummary = {
     dateLabel: today.format('dddd, DD MMMM YYYY'),
-    workText: formatDuration(workSeconds),
-    breakText: formatDuration(breakSeconds),
-    workIntervals: workIntervals.map(i => ({
+    workText: stats.workText,
+    breakText: stats.breakText,
+    workIntervals: stats.workIntervals.map(i => ({
       start: moment(i.start).format('HH:mm:ss'),
       end: moment(i.end).format('HH:mm:ss')
     })),
-    breakIntervals: breakIntervals.map(i => ({
+    breakIntervals: stats.breakIntervals.map(i => ({
       start: moment(i.start).format('HH:mm:ss'),
       end: moment(i.end).format('HH:mm:ss')
     })),
-    status,
-    baseWorkSeconds: workSeconds,
-    baseBreakSeconds: breakSeconds,
-    currentWorkStart: currentWorkStart ? currentWorkStart.getTime() : null,
-    currentBreakStart: currentBreakStart ? currentBreakStart.getTime() : null
+    status: stats.status,
+    baseWorkSeconds: stats.workSeconds,
+    baseBreakSeconds: stats.breakSeconds,
+    currentWorkStart: stats.currentWorkStart ? stats.currentWorkStart.getTime() : null,
+    currentBreakStart: stats.currentBreakStart ? stats.currentBreakStart.getTime() : null
   };
 
   const settings = await SystemSettings.findOne(); // Fetch latest settings
@@ -437,19 +461,15 @@ app.get('/supervisor', ensureAuth, async (req, res) => {
 
       const workSeconds = computeWorkSeconds(records);
 
-      const lastRecord = await Attendance.findOne({ user: m._id }).sort({ time: -1 });
-      let currentStatus = 'Idle';
-      if (lastRecord) {
-        if (lastRecord.action === 'check-in' || lastRecord.action === 'break-end') currentStatus = 'Working';
-        else if (lastRecord.action === 'break-start') currentStatus = 'Break';
-        else if (lastRecord.action === 'check-out') currentStatus = 'Idle';
-      }
+      // Get Today's Real-Time Stats
+      const todayStats = await getDailyStats(m._id);
 
       memberSummaries.push({
         user: m,
         workSeconds,
-        workText: formatDuration(workSeconds),
-        status: currentStatus
+        todayStats, // New realtime data
+        saturdayHoursStr: m.saturdayHoursStr,
+        hasSaturdayAttendance: m.hasSaturdayAttendance
       });
     }
 
@@ -498,30 +518,7 @@ app.get('/supervisor', ensureAuth, async (req, res) => {
         saturdayHoursStr,
         hasSaturdayAttendance
       });
-      saturdaySummaries.push({
-        user: m,
-        saturdayHoursStr,
-        hasSaturdayAttendance
-      });
     }
-
-    // 3. Real-Time Daily Stats (For "Today's Overview" Modal) - Grouped by Division
-    // reusing saturdayMembers because it contains ALL members of valid divisions
-    const dailyStats = await Promise.all(saturdayMembers.map(async (m) => {
-      const stats = await getDailyStats(m._id);
-      return {
-        user: m,
-        division: m.division,
-        workSeconds: stats.workSeconds,
-        breakSeconds: stats.breakSeconds,
-        status: stats.status,
-        currentWorkStart: stats.currentWorkStart,
-        currentBreakStart: stats.currentBreakStart,
-        // formatted for static display (JS will handle ticking)
-        workText: formatDuration(stats.workSeconds),
-        breakText: formatDuration(stats.breakSeconds)
-      };
-    }));
 
     const statusObj = await getUserStatus(req.user._id);
 
@@ -534,7 +531,6 @@ app.get('/supervisor', ensureAuth, async (req, res) => {
       monthLabel: startOfMonth.format('MMMM YYYY'),
       memberSummaries,
       saturdaySummaries, // Pass Saturday data
-      dailyStats, // Pass Real-Time Daily Stats
       canManageUsers: (req.user.role === 'Admin' || req.user.role === 'General Manager' || ((req.user.role === 'Supervisor' || req.user.role === 'Operational Manager') && (req.user.division === 'HR' || req.user.secondaryDivision === 'HR'))),
       settings,
       query: req.query,
@@ -2036,73 +2032,6 @@ async function getUserStatus(userId) {
   return { status: 'idle', label: '' };
 }
 
-// Helper: Get Daily Stats for a User (for Real-time monitoring)
-async function getDailyStats(userId, dateObj = moment()) {
-  const startOfDay = dateObj.clone().startOf('day').toDate();
-  const endOfDay = dateObj.clone().endOf('day').toDate();
-
-  const records = await Attendance.find({
-    user: userId,
-    time: { $gte: startOfDay, $lte: endOfDay }
-  }).sort({ time: 1 });
-
-  let workSeconds = 0;
-  let breakSeconds = 0;
-  let lastCheckIn = null;
-  let lastBreakStart = null;
-  const workIntervals = [];
-  const breakIntervals = [];
-
-  records.forEach(r => {
-    const t = r.time;
-    if (r.action === 'check-in') {
-      lastCheckIn = t;
-    } else if (r.action === 'check-out') {
-      if (lastCheckIn) {
-        workSeconds += (t - lastCheckIn) / 1000;
-        workIntervals.push({ start: lastCheckIn, end: t });
-        lastCheckIn = null;
-      }
-    } else if (r.action === 'break-start') {
-      if (lastCheckIn) {
-        workSeconds += (t - lastCheckIn) / 1000;
-        workIntervals.push({ start: lastCheckIn, end: t });
-        lastCheckIn = null;
-      }
-      lastBreakStart = t;
-    } else if (r.action === 'break-end') {
-      if (lastBreakStart) {
-        breakSeconds += (t - lastBreakStart) / 1000;
-        breakIntervals.push({ start: lastBreakStart, end: t });
-        lastBreakStart = null;
-      }
-      lastCheckIn = t;
-    }
-  });
-
-  let status = 'idle';
-  let currentWorkStart = null;
-  let currentBreakStart = null;
-
-  if (lastCheckIn) {
-    status = 'working';
-    currentWorkStart = lastCheckIn;
-  } else if (lastBreakStart) {
-    status = 'break';
-    currentBreakStart = lastBreakStart;
-  }
-
-  return {
-    workSeconds,
-    breakSeconds,
-    status,
-    currentWorkStart: currentWorkStart ? currentWorkStart.getTime() : null,
-    currentBreakStart: currentBreakStart ? currentBreakStart.getTime() : null
-  };
-}
-
-
-
 // Start server
 mongoose.connect(process.env.MONGODB_URI, {
   useNewUrlParser: true,
@@ -2110,7 +2039,6 @@ mongoose.connect(process.env.MONGODB_URI, {
 }).then(async () => {
   console.log("✅ MongoDB connected");
   await ensureDefaultAdmin();
-  // Start server
+  // Start Server
   app.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`));
-
 }).catch(err => console.error("MongoDB connection error:", err));
