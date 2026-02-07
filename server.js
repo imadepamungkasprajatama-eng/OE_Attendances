@@ -142,6 +142,29 @@ function checkUserManagement(req, res, next) {
   return res.status(403).send('Forbidden: HR Access Required');
 }
 
+// Logout Routes
+app.get('/logout', (req, res) => {
+  console.log(`[Logout] User ${req.user ? req.user.email : 'Unknown'} manually logging out.`);
+  req.logout((err) => {
+    if (err) console.error(err);
+    req.session.destroy(); // Explicitly destroy session
+    res.redirect('/login');
+  });
+});
+
+app.post('/auth/logout', (req, res) => {
+  console.log(`[Auto-Logout] Beacon received for ${req.user ? req.user.email : 'Unknown'}`);
+  req.logout((err) => {
+    if (err) {
+      console.error(err);
+      return res.status(500).send('Error');
+    }
+    req.session.destroy(); // Explicitly destroy session
+    // sendBeacon expects no response, but we send 200 OK
+    res.status(200).send('Logged out');
+  });
+});
+
 // Helper: Format Seconds to HH:mm:ss
 function formatDuration(sec) {
   sec = Math.floor(sec);
@@ -1616,7 +1639,7 @@ app.post('/admin/generate-qr', ensureRole('Admin'), async (req, res) => {
 
 // Attendance actions
 app.post('/attendance/action', ensureAuth, async (req, res) => {
-  const { action, qrToken, lat, lng, accuracy } = req.body;
+  let { action, qrToken, lat, lng, accuracy } = req.body;
   console.log(`[Attendance Action] User: ${req.user.email}, Lat: ${lat}, Lng: ${lng}, Acc: ${accuracy}`);
   try {
     const valid = await QRToken.validate(qrToken);
@@ -1671,18 +1694,26 @@ app.post('/attendance/action', ensureAuth, async (req, res) => {
       });
     }
 
-    // Check last status for Auto-Stop Break logic
+    // Check last status for Auto-Stop Break or Logic Correction
     const lastAtt = await Attendance.findOne({ user: req.user._id }).sort({ time: -1 });
 
-    if (action === 'check-out' && lastAtt && lastAtt.action === 'break-start') {
-      console.log(`[Auto-Stop Break] User ${req.user.email} checking out while on break. Inserting break-end.`);
-      const breakEnd = new Attendance({
-        user: req.user._id,
-        action: 'break-end',
-        time: new Date(), // Now
-        meta: { auto: true, lat, lng, qrToken, accuracy }
-      });
-      await breakEnd.save();
+    if (lastAtt) {
+      if (action === 'check-out' && lastAtt.action === 'break-start') {
+        console.log(`[Auto-Stop Break] User ${req.user.email} checking out while on break. Inserting break-end.`);
+        const breakEnd = new Attendance({
+          user: req.user._id,
+          action: 'break-end',
+          time: new Date(),
+          meta: { auto: true, lat, lng, qrToken, accuracy }
+        });
+        await breakEnd.save();
+      }
+
+      // Fix: If user mistakenly clicks "Check In" while on Break, treat it as "Break End"
+      if (action === 'check-in' && lastAtt.action === 'break-start') {
+        console.log(`[Logic Fix] User ${req.user.email} sent 'check-in' while on Break. Converting to 'break-end'.`);
+        action = 'break-end';
+      }
     }
 
     const att = new Attendance({

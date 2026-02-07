@@ -9,7 +9,15 @@ async function postAction(action, qrToken, lat, lng, accuracy) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ action, qrToken, lat, lng, accuracy })
   });
-  return res.json();
+
+  // Check if response is JSON (it might be HTML if redirected to Login)
+  const contentType = res.headers.get("content-type");
+  if (contentType && contentType.indexOf("application/json") !== -1) {
+    return res.json();
+  } else {
+    // Likely HTML (Login Page) -> Session Expired
+    return { error: "Session expired. reloading..." };
+  }
 }
 
 async function doGeolocatedAction(action, qrToken) {
@@ -338,6 +346,16 @@ function setupUILock() {
   if (status === 'working') {
     startGeofenceMonitor();
   }
+
+  // Auto-Logout if Idle on Tab Close
+  window.addEventListener('pagehide', () => {
+    if (window.USER_STATUS === 'idle') {
+      // Use sendBeacon for reliable request on unload
+      const data = new FormData();
+      // No data needed, just hitting the endpoint
+      navigator.sendBeacon('/auth/logout');
+    }
+  });
 }
 
 // Initialize
