@@ -142,6 +142,26 @@ function checkUserManagement(req, res, next) {
   return res.status(403).send('Forbidden: HR Access Required');
 }
 
+// Middleware to check pending logout
+app.use((req, res, next) => {
+  if (req.session && req.session.logoutScheduledAt) {
+    if (Date.now() > req.session.logoutScheduledAt) {
+      console.log(`[Auto-Logout] Scheduled logout executed for ${req.user ? req.user.email : 'Unknown'}`);
+      req.logout((err) => {
+        req.session.destroy();
+        res.redirect('/login');
+      });
+      return;
+    } else {
+      // User is back! Cancel scheduled logout
+      console.log(`[Auto-Logout] User returned. Cancelled scheduled logout.`);
+      delete req.session.logoutScheduledAt;
+      req.session.save();
+    }
+  }
+  next();
+});
+
 // Logout Routes
 app.get('/logout', (req, res) => {
   console.log(`[Logout] User ${req.user ? req.user.email : 'Unknown'} manually logging out.`);
@@ -163,6 +183,15 @@ app.post('/auth/logout', (req, res) => {
     // sendBeacon expects no response, but we send 200 OK
     res.status(200).send('Logged out');
   });
+});
+
+app.post('/auth/logout-delayed', (req, res) => {
+  if (req.session) {
+    console.log(`[Auto-Logout] Scheduling logout in 1 minute for ${req.user ? req.user.email : 'Unknown'}`);
+    req.session.logoutScheduledAt = Date.now() + 60000; // 1 minute
+    req.session.save();
+  }
+  res.status(200).send('Scheduled');
 });
 
 // Helper: Format Seconds to HH:mm:ss

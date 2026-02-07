@@ -943,6 +943,11 @@
                 }
               });
             }, 1000);
+
+            // Auto-Logout on Tab Close (Delayed by 1 min)
+            window.addEventListener('pagehide', () => {
+              navigator.sendBeacon('/auth/logout-delayed');
+            });
           </script>
 
           <%- include('partials/footer') %>
