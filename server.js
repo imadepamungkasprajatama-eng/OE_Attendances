@@ -646,16 +646,39 @@ app.get('/admin', ensureRole('Admin'), async (req, res) => {
       };
     }));
 
+    // Logic for "Today's Overview" Tab (Admin sees all divisions)
+    const managedDivisions = ['GM', 'OC', 'N1', 'SnG', 'e1', 'CE', 'EC', 'PX', 'FN', 'HR'];
+    const division = req.query.division || 'GM'; // Default Division
+
+    const divisionMembers = await User.find({ division }).sort({ name: 1 });
+    const memberSummaries = [];
+
+    for (const m of divisionMembers) {
+      const todayStats = await getDailyStats(m._id);
+      memberSummaries.push({
+        user: m,
+        todayStats
+      });
+    }
+
     res.render('admin_dashboard', {
       user: req.user,
       users,
       settings,
       selectedMonth,
       token: tokenData,
-      query: req.query
+      query: req.query,
+      // New variables for Today's Overview
+      managedDivisions,
+      division,
+      memberSummaries,
+      divisionMembers
     });
   } catch (err) {
-    console.error(err);
+    console.error('[ADMIN DASHBOARD ERROR]', err);
+    try {
+      require('fs').appendFileSync('debug_error.log', `[${new Date().toISOString()}] Admin Dashboard Error: ${err.message}\n${err.stack}\n\n`);
+    } catch (e) { console.error('Failed to write log:', e); }
     res.status(500).send('Error loading admin dashboard');
   }
 });
@@ -1962,9 +1985,13 @@ app.post('/admin/settings/update', ensureAuth, ensureRole('Admin'), async (req, 
     let settings = await SystemSettings.findOne();
     if (!settings) settings = new SystemSettings();
 
-    if (officeLat) settings.officeLat = parseFloat(officeLat);
-    if (officeLng) settings.officeLng = parseFloat(officeLng);
-    if (officeRadius) settings.officeRadius = parseFloat(officeRadius);
+    const lat = parseFloat(officeLat);
+    const lng = parseFloat(officeLng);
+    const rad = parseFloat(officeRadius);
+
+    if (!isNaN(lat)) settings.officeLat = lat;
+    if (!isNaN(lng)) settings.officeLng = lng;
+    if (!isNaN(rad)) settings.officeRadius = rad;
 
     await settings.save();
 
@@ -1984,9 +2011,9 @@ app.post('/admin/settings/update', ensureAuth, ensureRole('Admin'), async (req, 
           }
         };
 
-        if (officeLat) updateKey('OFFICE_LAT', officeLat);
-        if (officeLng) updateKey('OFFICE_LNG', officeLng);
-        if (officeRadius) updateKey('OFFICE_RADIUS_METERS', officeRadius);
+        if (!isNaN(lat)) updateKey('OFFICE_LAT', lat);
+        if (!isNaN(lng)) updateKey('OFFICE_LNG', lng);
+        if (!isNaN(rad)) updateKey('OFFICE_RADIUS_METERS', rad);
 
         fs.writeFileSync(envPath, envContent);
       }
@@ -1996,7 +2023,12 @@ app.post('/admin/settings/update', ensureAuth, ensureRole('Admin'), async (req, 
 
     res.redirect('/admin?msg=settingsUpdated');
   } catch (err) {
-    console.error(err);
+    console.error('[SETTINGS UPDATE ERROR]', err);
+    // Try to write to a log file for debugging
+    try {
+      require('fs').appendFileSync('debug_error.log', `[${new Date().toISOString()}] Settings Update Error: ${err.message}\n${err.stack}\n\n`);
+    } catch (e) { console.error('Failed to write log:', e); }
+
     res.redirect('/admin?msg=error');
   }
 });
