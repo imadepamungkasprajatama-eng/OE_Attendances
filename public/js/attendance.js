@@ -336,23 +336,38 @@ function stopGeofenceMonitor() {
 }
 
 // UI Locking (Prevent Refresh/Close)
+// UI Locking (Prevent Refresh/Close) -- Now smarter about Navigation
+let isNavigating = false;
+
+function setupNavigationGuard() {
+  // Detect clicks on internal links
+  document.addEventListener('click', (e) => {
+    const link = e.target.closest('a');
+    if (link && link.href && !link.href.startsWith('javascript:') && !link.target) {
+      // It's a valid link navigation (not new tab)
+      isNavigating = true;
+    }
+  });
+
+  // Detect form submissions
+  document.addEventListener('submit', () => {
+    isNavigating = true;
+  });
+}
+
 function setupUILock() {
   const status = window.USER_STATUS;
-  // window.addEventListener('beforeunload') removed as per user request
 
-
-  // Geofence only if working (User didn't ask for auto-check-in/out on break, just logout prevention)
-  // But usually break is taken onsite, so maybe we keep it off to avoid accidental check-outs while grabbing lunch nearby
   if (status === 'working') {
     startGeofenceMonitor();
   }
 
-  // Auto-Logout if Idle on Tab Close
+  setupNavigationGuard();
+
+  // Auto-Logout if Idle on Tab Close (BUT NOT on Navigation)
   window.addEventListener('pagehide', () => {
-    if (window.USER_STATUS === 'idle') {
+    if (window.USER_STATUS === 'idle' && !isNavigating) {
       // Use sendBeacon for reliable request on unload
-      const data = new FormData();
-      // No data needed, just hitting the endpoint
       navigator.sendBeacon('/auth/logout');
     }
   });
