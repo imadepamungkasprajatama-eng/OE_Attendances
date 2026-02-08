@@ -68,8 +68,9 @@
             // 1. Status is IDLE
             // 2. We are NOT navigating to another page in the app
             if (status === 'idle' && !isNavigating) {
-                console.log('[LogoutGuard] Tab closed & Idle. Sending logout beacon.');
-                navigator.sendBeacon('/auth/logout');
+                const logoutUrl = window.LOGOUT_URL || '/auth/logout';
+                console.log(`[LogoutGuard] Tab closed & Idle. Sending logout beacon to ${logoutUrl}`);
+                navigator.sendBeacon(logoutUrl);
             }
         });
     }

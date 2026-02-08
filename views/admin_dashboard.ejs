@@ -219,7 +219,7 @@
                           <form action="/" method="GET" class="mb-3 d-flex align-items-center gap-2">
                             <label class="fw-bold small text-muted">Division:</label>
                             <select name="division" class="form-select form-select-sm" style="width: auto;"
-                              onchange="this.form.submit()">
+                              onchange="if(window.markNavigation) window.markNavigation(); this.form.submit()">
                               <% managedDivisions.forEach(div=> { %>
                                 <option value="<%= div %>" <%=division===div ? 'selected' : '' %>><%= div %>
                                 </option>
@@ -227,6 +227,7 @@
                             </select>
                             <input type="hidden" name="month" value="<%= selectedMonth %>">
                             <input type="hidden" name="openModal" value="true">
+                            <input type="hidden" name="activeTab" value="today">
                             <button type="submit" class="btn btn-sm btn-outline-primary">Refresh</button>
                           </form>
 
@@ -299,6 +300,7 @@
 
                           <form action="/" method="GET" class="mb-3 d-flex align-items-center gap-2">
                             <input type="hidden" name="openModal" value="true">
+                            <input type="hidden" name="activeTab" value="saturday">
                             <label class="fw-bold small text-muted">Month:</label>
                             <input type="month" name="month" class="form-control form-control-sm" style="width: auto;"
                               value="<%= selectedMonth %>">
@@ -904,6 +906,22 @@
               // Create new instance or get existing
               var myModal = new bootstrap.Modal(modalEl);
               myModal.show();
+
+              // Handle Active Tab
+              var activeTab = "<%= (typeof query !=='undefined' && query.activeTab) ? query.activeTab : 'today' %>";
+              var triggerEl = null;
+              if (activeTab === 'saturday') {
+                triggerEl = document.getElementById('pills-sat-tab');
+              } else if (activeTab === 'holidays') {
+                triggerEl = document.getElementById('pills-hols-tab');
+              } else {
+                triggerEl = document.getElementById('pills-today-tab');
+              }
+
+              if (triggerEl) {
+                var tab = new bootstrap.Tab(triggerEl);
+                tab.show();
+              }
             }
           });
         </script>
@@ -944,10 +962,12 @@
               });
             }, 1000);
 
-            // Auto-Logout on Tab Close (Delayed by 1 min)
-            window.addEventListener('pagehide', () => {
-              navigator.sendBeacon('/auth/logout-delayed');
-            });
+
           </script>
 
           <%- include('partials/footer') %>
+            <script>
+              // Inject status for logout-guard.js
+              window.USER_STATUS = '<%= (typeof currentUserStats !== "undefined" && currentUserStats.status) ? currentUserStats.status : "idle" %>';
+              window.LOGOUT_URL = '/auth/logout-delayed';
+            </script>
