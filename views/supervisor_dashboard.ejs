@@ -92,7 +92,7 @@
                               <form action="/supervisor" method="GET" class="mb-3 d-flex align-items-center gap-2">
                                 <label class="fw-bold small text-muted">Division:</label>
                                 <select name="division" class="form-select form-select-sm" style="width: auto;"
-                                  onchange="this.form.submit()">
+                                  onchange="if(window.markNavigation) window.markNavigation(); this.form.submit()">
                                   <% managedDivisions.forEach(div=> { %>
                                     <option value="<%= div %>" <%=division===div ? 'selected' : '' %>>
                                       <%= div %>
@@ -101,6 +101,7 @@
                                 </select>
                                 <input type="hidden" name="month" value="<%= monthParam %>">
                                 <input type="hidden" name="openModal" value="true">
+                                <input type="hidden" name="activeTab" value="today">
                                 <button type="submit" class="btn btn-sm btn-outline-primary">Refresh</button>
                               </form>
 
@@ -175,6 +176,7 @@
                                   <input type="hidden" name="division" value="<%= division %>">
                                   <% } %>
                                     <input type="hidden" name="openModal" value="true">
+                                    <input type="hidden" name="activeTab" value="saturday">
                                     <label class="fw-bold small text-muted">Month:</label>
                                     <input type="month" name="month" class="form-control form-control-sm"
                                       style="width: auto;" value="<%= monthParam %>">
@@ -286,7 +288,8 @@
           <% if (managedDivisions && managedDivisions.length> 1) { %>
             <form method="GET" action="/supervisor">
               <input type="hidden" name="month" value="<%= monthParam %>">
-              <select name="division" class="form-select" onchange="this.form.submit()">
+              <select name="division" class="form-select"
+                onchange="if(window.markNavigation) window.markNavigation(); this.form.submit()">
                 <% managedDivisions.forEach(function(d){ %>
                   <option value="<%= d %>" <%=d===division ? 'selected' : '' %>><%= d %>
                   </option>
@@ -591,6 +594,22 @@
                 if (modalEl) {
                   var myModal = new bootstrap.Modal(modalEl);
                   myModal.show();
+
+                  // Handle Active Tab
+                  var activeTab = "<%= query.activeTab || 'today' %>";
+                  var triggerEl = null;
+                  if (activeTab === 'saturday') {
+                    triggerEl = document.getElementById('pills-sat-tab-sup');
+                  } else if (activeTab === 'holidays') {
+                    triggerEl = document.getElementById('pills-hols-tab-sup');
+                  } else {
+                    triggerEl = document.getElementById('pills-today-tab-sup');
+                  }
+
+                  if (triggerEl) {
+                    var tab = new bootstrap.Tab(triggerEl);
+                    tab.show();
+                  }
                 } else {
                   console.error("Modal element not found!");
                 }
@@ -636,6 +655,11 @@
                 // Update every second
                 setInterval(updateStaffTimers, 1000);
                 updateStaffTimers(); // Initial call
+              </script>
+
+              <script>
+                // Inject User Status for Logout Guard
+                window.USER_STATUS = '<%= (typeof currentUserStats !== "undefined" && currentUserStats.status) ? currentUserStats.status : "idle" %>';
               </script>
 
               <%- include('partials/footer') %>

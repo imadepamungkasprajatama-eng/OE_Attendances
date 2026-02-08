@@ -26,7 +26,7 @@ const UserSchema = new mongoose.Schema({
 
   division: {
     type: String,
-    enum: ['Admin', 'GM', 'OC', 'N1', 'SnG', 'e1', 'CE', 'EC', 'PX', 'Finance', 'HR', 'All Division'],
+    enum: ['Admin', 'GM', 'OC', 'N1', 'SnG', 'e1', 'CE', 'EC', 'PX', 'FN', 'HR', 'All Division'],
     default: 'OC'
   },
 

@@ -130,7 +130,7 @@ function checkUserManagement(req, res, next) {
   if (req.user.role === 'Admin') return next();
 
   // Check for Supervisor/GM with HR division or All Division
-  const allowedRoles = ['Supervisor', 'General Manager'];
+  const allowedRoles = ['Supervisor', 'General Manager', 'Operational Manager'];
   const isHrOrAll = req.user.division === 'HR' ||
     req.user.division === 'All Division' ||
     req.user.secondaryDivision === 'HR' ||
@@ -1840,7 +1840,7 @@ app.post('/admin/update-saturday-shifts', checkUserManagement, async (req, res) 
 });
 
 // --- HOLIDAY ROUTES ---
-app.post('/admin/holidays/add', ensureAuth, ensureRole(['Admin', 'HR']), async (req, res) => {
+app.post('/admin/holidays/add', ensureAuth, checkUserManagement, async (req, res) => {
   try {
     const { date } = req.body; // YYYY-MM-DD
     if (date) {
@@ -1856,6 +1856,9 @@ app.post('/admin/holidays/add', ensureAuth, ensureRole(['Admin', 'HR']), async (
       }
     }
     const referer = req.get('Referer');
+    if (referer && referer.includes('/supervisor')) {
+      return res.redirect('/supervisor?openModal=true&activeTab=holidays&msg=holidayAdded');
+    }
     res.redirect(referer || '/?msg=holidayAdded');
   } catch (err) {
     console.error(err);
@@ -1863,7 +1866,7 @@ app.post('/admin/holidays/add', ensureAuth, ensureRole(['Admin', 'HR']), async (
   }
 });
 
-app.post('/admin/holidays/remove', ensureAuth, ensureRole(['Admin', 'HR']), async (req, res) => {
+app.post('/admin/holidays/remove', ensureAuth, checkUserManagement, async (req, res) => {
   try {
     const { date } = req.body;
     if (date) {
@@ -1875,6 +1878,9 @@ app.post('/admin/holidays/remove', ensureAuth, ensureRole(['Admin', 'HR']), asyn
       }
     }
     const referer = req.get('Referer');
+    if (referer && referer.includes('/supervisor')) {
+      return res.redirect('/supervisor?openModal=true&activeTab=holidays&msg=holidayRemoved');
+    }
     res.redirect(referer || '/?msg=holidayRemoved');
   } catch (err) {
     console.error(err);
