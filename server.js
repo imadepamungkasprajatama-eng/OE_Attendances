@@ -9,8 +9,9 @@ const passport = require('passport');
 const GoogleStrategy = require('passport-google-oauth20').Strategy;
 const path = require('path');
 const qrcode = require('qrcode');
-const moment = require('moment');
+const moment = require('moment-timezone'); // Check-In Timezone Fix
 moment.locale('id');
+moment.tz.setDefault("Asia/Makassar"); // UTC+8
 const bcrypt = require('bcrypt');
 
 const User = require('./models/User');
