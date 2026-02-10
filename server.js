@@ -790,7 +790,12 @@ app.get('/admin/attendance/export-yearly-final', ensureRole('Admin'), async (req
   console.log('[DEBUG] Hit export-yearly-final');
   try {
     const { userId } = req.query;
-    const yearParam = req.query.year || moment().format('YYYY');
+    let yearParam = req.query.year;
+    if (!yearParam || !/^\d{4}$/.test(yearParam)) {
+      yearParam = moment().format('YYYY');
+    }
+
+    console.log(`[DEBUG] Exporting for Year: ${yearParam}, User: ${userId}`);
 
     if (!userId) {
       return res.status(400).send('userId is required');
@@ -801,17 +806,30 @@ app.get('/admin/attendance/export-yearly-final', ensureRole('Admin'), async (req
       return res.status(404).send('User not found');
     }
 
-    const startOfYear = moment(yearParam + '-01-01', 'YYYY-MM-DD').startOf('year');
+    const startOfYear = moment(`${yearParam}-01-01`, 'YYYY-MM-DD').startOf('year');
     const endOfYear = startOfYear.clone().endOf('year');
 
+    if (!startOfYear.isValid() || !endOfYear.isValid()) {
+      console.error('[ERROR] Invalid Date Calculation');
+      return res.status(400).send('Invalid Year');
+    }
+
+    console.time('DB_Query');
     const records = await Attendance.find({
       user: userId,
       time: { $gte: startOfYear.toDate(), $lte: endOfYear.toDate() },
       action: { $in: ['check-in', 'check-out', 'break-start', 'break-end'] }
     })
-      .select('user time action') // Exclude meta/lat/lng to save memory
+      .select('user time action')
       .sort({ time: 1 })
-      .lean(); // Faster/lighter if not needing Mongoose document methods
+      .lean();
+    console.timeEnd('DB_Query');
+    console.log(`[DEBUG] Found ${records.length} records`);
+
+    // Safety check for record count
+    if (records.length > 20000) {
+      console.warn('[WARN] Large record set, might be slow');
+    }
 
     const settings = await SystemSettings.findOne() || { holidays: [], saturdayWorkHours: 4 };
 
@@ -819,7 +837,8 @@ app.get('/admin/attendance/export-yearly-final', ensureRole('Admin'), async (req
     // Map: YYYY-MM-DD -> { workMs, breakMs, ... }
     const dayMap = new Map();
     const curr = startOfYear.clone();
-    while (curr.isBefore(endOfYear) || curr.isSame(endOfYear, 'day')) {
+    let safeGuard = 0;
+    while ((curr.isBefore(endOfYear) || curr.isSame(endOfYear, 'day')) && safeGuard < 400) {
       const dKey = curr.format('YYYY-MM-DD');
       dayMap.set(dKey, {
         dateObj: curr.clone(),
@@ -829,6 +848,7 @@ app.get('/admin/attendance/export-yearly-final', ensureRole('Admin'), async (req
         lastCheckIn: null, lastBreakStart: null
       });
       curr.add(1, 'days');
+      safeGuard++;
     }
 
     records.forEach(r => {
