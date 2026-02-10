@@ -785,141 +785,109 @@ app.post('/admin/attendance/delete-by-user', ensureRole('Admin'), async (req, re
 
 
 
-// ADMIN: export User Detail (Excel with Daily, Weekly, Monthly tabs)
-app.get('/admin/attendance/export-by-user', ensureRole('Admin'), async (req, res) => {
+// ADMIN: export User History (Yearly)
+app.get('/admin/attendance/export-yearly-final', ensureRole('Admin'), async (req, res) => {
+  console.log('[DEBUG] Hit export-yearly-final');
   try {
     const { userId } = req.query;
-    // Default to current month if not provided
-    const month = req.query.month || moment().format('YYYY-MM');
+    const yearParam = req.query.year || moment().format('YYYY');
 
     if (!userId) {
       return res.status(400).send('userId is required');
     }
-
-    const [yearStr, monthStr] = month.split('-');
-    if (!yearStr || !monthStr) {
-      return res.status(400).send('Invalid month format (YYYY-MM)');
-    }
-
-    const startOfMonth = moment(`${yearStr}-${monthStr}-01`, 'YYYY-MM-DD').startOf('month');
-    const endOfMonth = startOfMonth.clone().endOf('month');
 
     const user = await User.findById(userId);
     if (!user) {
       return res.status(404).send('User not found');
     }
 
-    const settings = await SystemSettings.findOne() || { holidays: [], saturdayWorkHours: 4 };
+    const startOfYear = moment(yearParam + '-01-01', 'YYYY-MM-DD').startOf('year');
+    const endOfYear = startOfYear.clone().endOf('year');
 
     const records = await Attendance.find({
       user: userId,
-      time: { $gte: startOfMonth.toDate(), $lte: endOfMonth.toDate() }
+      time: { $gte: startOfYear.toDate(), $lte: endOfYear.toDate() }
     }).sort({ time: 1 });
 
-    // --- Aggregation Logic (Same as Supervisor Export) ---
+    const settings = await SystemSettings.findOne() || { holidays: [], saturdayWorkHours: 4 };
+
+    // --- Process Data (Unified dayMap) ---
+    // Map: YYYY-MM-DD -> { workMs, breakMs, ... }
     const dayMap = new Map();
-    const daysInMonth = startOfMonth.daysInMonth();
-    for (let i = 1; i <= daysInMonth; i++) {
-      const d = startOfMonth.clone().date(i);
-      const dayKey = d.format('YYYY-MM-DD');
-      dayMap.set(dayKey, {
-        dateObj: d,
-        dayName: d.format('dddd'),
-        checkIn: null,
-        checkOut: null,
-        workMs: 0,
-        breakMs: 0,
-        lastCheckIn: null,
-        lastBreakStart: null
+    const curr = startOfYear.clone();
+    while (curr.isBefore(endOfYear) || curr.isSame(endOfYear, 'day')) {
+      const dKey = curr.format('YYYY-MM-DD');
+      dayMap.set(dKey, {
+        dateObj: curr.clone(),
+        dayName: curr.locale('id').format('dddd'),
+        in: null, out: null, workMs: 0, breakMs: 0,
+        checkIn: null, checkOut: null,
+        lastCheckIn: null, lastBreakStart: null
       });
+      curr.add(1, 'days');
     }
 
     records.forEach(r => {
-      const dayKey = moment(r.time).format('YYYY-MM-DD');
-      const data = dayMap.get(dayKey);
-      if (!data) return;
+      const dKey = moment(r.time).format('YYYY-MM-DD');
+      if (dayMap.has(dKey)) {
+        const day = dayMap.get(dKey);
+        const t = r.time.getTime();
 
-      const t = r.time.getTime();
-
-      if (r.action === 'check-in') {
-        if (!data.checkIn) data.checkIn = r.time;
-        data.lastCheckIn = t;
-      } else if (r.action === 'check-out') {
-        if (!data.checkOut || r.time > data.checkOut) data.checkOut = r.time;
-        if (data.lastCheckIn) {
-          data.workMs += (t - data.lastCheckIn);
-          data.lastCheckIn = null;
+        if (r.action === 'check-in') {
+          if (!day.checkIn) day.checkIn = r.time;
+          if (!day.in) day.in = r.time;
+          day.lastCheckIn = t;
+          day.lastBreakStart = null;
+        } else if (r.action === 'check-out') {
+          if (!day.checkOut || r.time > day.checkOut) day.checkOut = r.time;
+          if (!day.out || r.time > day.out) day.out = r.time;
+          if (day.lastCheckIn) {
+            day.workMs += (t - day.lastCheckIn);
+            day.lastCheckIn = null;
+          }
+        } else if (r.action === 'break-start') {
+          if (day.lastCheckIn) {
+            day.workMs += (t - day.lastCheckIn);
+            day.lastCheckIn = null;
+          }
+          day.lastBreakStart = t;
+        } else if (r.action === 'break-end') {
+          if (day.lastBreakStart) {
+            day.breakMs += (t - day.lastBreakStart);
+            day.lastBreakStart = null;
+          }
+          day.lastCheckIn = t;
         }
-      } else if (r.action === 'break-start') {
-        if (data.lastCheckIn) {
-          data.workMs += (t - data.lastCheckIn);
-          data.lastCheckIn = null;
-        }
-        data.lastBreakStart = t;
-      } else if (r.action === 'break-end') {
-        if (data.lastBreakStart) {
-          data.breakMs += (t - data.lastBreakStart);
-          data.lastBreakStart = null;
-        }
-        data.lastCheckIn = t;
       }
     });
 
-    // --- Generate Excel (3 Sheets, No Borders) ---
+    // --- Generate Excel (Unified Block) ---
     const workbook = new ExcelJS.Workbook();
-    const templatePath = path.join(__dirname, 'MasterFile', 'Individual Attendance Detail.xlsx');
 
     // Default Styles
-    let headerStyle = { font: { bold: true }, fill: null, border: null };
+    let headerStyle = { font: { bold: true, color: { argb: 'FFFFFFFF' } }, fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF4F46E5' } }, border: null };
     let dataStyle = { font: {}, border: null };
     let weeklyStyle = { font: { bold: true }, fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEEEEEE' } }, border: null };
 
-    // Load Template Styles
+    // Attempt load styles from template
     try {
       const tempWb = new ExcelJS.Workbook();
-      await tempWb.xlsx.readFile(templatePath);
+      await tempWb.xlsx.readFile(path.join(__dirname, 'MasterFile', 'Yearly Individual Attendance Detail.xlsx'));
       const tempSheet = tempWb.getWorksheet(1);
       if (tempSheet) {
         const r1 = tempSheet.getRow(1);
         if (r1.font) headerStyle.font = r1.font;
-        if (r1.getCell(1).fill) headerStyle.fill = r1.getCell(1).fill;
+        // Force Blue
+        headerStyle.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF4F46E5' } };
+        headerStyle.border = null;
 
         const r2 = tempSheet.getRow(2);
         if (r2.font) dataStyle.font = r2.font;
-
-        const r3 = tempSheet.getRow(3);
-        if (r3.font) weeklyStyle.font = r3.font;
-        if (r3.getCell(1).fill) weeklyStyle.fill = r3.getCell(1).fill;
+        dataStyle.border = null;
       }
-    } catch (e) {
-      console.warn("Individual Template not found, using defaults", e);
-    }
+    } catch (e) { }
 
-    // --- SHEET 1: Monthly Summary ---
-    const sheet1 = workbook.addWorksheet('Monthly Summary');
-    const headers1 = ['Week', 'Date', 'Day', 'Clock In', 'Clock Out', 'Total Work', 'Total Break', 'Status'];
-    const hRow1 = sheet1.addRow(headers1);
-
-    // Force Blue Header
-    if (!headerStyle.fill) {
-      headerStyle.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF4F46E5' } };
-      headerStyle.font = { bold: true, color: { argb: 'FFFFFFFF' } };
-    }
-
-    hRow1.font = headerStyle.font;
-    hRow1.eachCell(c => { if (headerStyle.fill) c.fill = headerStyle.fill; });
-
-    sheet1.getColumn(1).width = 8;
-    sheet1.getColumn(2).width = 15;
-    sheet1.getColumn(3).width = 15;
-    sheet1.getColumn(4).width = 12;
-    sheet1.getColumn(5).width = 12;
-    sheet1.getColumn(6).width = 15;
-    sheet1.getColumn(7).width = 15;
-    sheet1.getColumn(8).width = 20;
-
-    let currentWeek = null;
-    let weekWorkMs = 0;
+    // Helper formatters
     const formatDur = (ms) => {
       if (!ms) return "00:00:00";
       const h = Math.floor(ms / 3600000);
@@ -928,14 +896,97 @@ app.get('/admin/attendance/export-by-user', ensureRole('Admin'), async (req, res
       return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
     };
 
-    const addDataRow = (sheet, key, val, wNum, isFilteredWeek = false) => {
+    // --- SHEET 1: Yearly Summary (Dashboard Style - Week 1-5) ---
+    const wsYear = workbook.addWorksheet('Yearly Summary');
+    wsYear.getColumn(1).width = 8; wsYear.getColumn(6).width = 8;
+    wsYear.getColumn(2).width = 15; wsYear.getColumn(7).width = 15;
+    wsYear.getColumn(3).width = 15; wsYear.getColumn(8).width = 15;
+    wsYear.getColumn(4).width = 15; wsYear.getColumn(9).width = 15;
+    wsYear.getColumn(5).width = 2;
+
+    const renderMonthBlock = (monthIndex, startRow, startCol) => {
+      const mObj = moment(yearParam + '-01-01', 'YYYY-MM-DD').month(monthIndex);
+      const mName = mObj.format('MMMM YYYY');
+
+      const hCell = wsYear.getCell(startRow, startCol);
+      hCell.value = mName;
+      hCell.font = headerStyle.font;
+      hCell.fill = headerStyle.fill;
+      try { wsYear.mergeCells(startRow, startCol, startRow, startCol + 3); } catch (e) { }
+
+      const subRow = startRow + 1;
+      ['Week', 'Total Work', 'Total Break', 'Status'].forEach((h, i) => {
+        const cell = wsYear.getCell(subRow, startCol + i);
+        cell.value = h;
+        cell.font = headerStyle.font;
+        cell.fill = headerStyle.fill;
+      });
+
+      // Filter days
+      const daysInMonth = Array.from(dayMap.values()).filter(d => d.dateObj.month() === monthIndex);
+
+      // Group by Week 1-5
+      const weekMap = new Map();
+      daysInMonth.forEach(d => {
+        const iso = d.dateObj.isoWeek();
+        if (!weekMap.has(iso)) weekMap.set(iso, { work: 0, break: 0 });
+        const w = weekMap.get(iso);
+        w.work += d.workMs;
+        w.break += d.breakMs;
+      });
+      const sortedIsos = [...weekMap.keys()].sort((a, b) => a - b);
+
+      let rOffset = 2;
+      sortedIsos.forEach((iso, idx) => {
+        const wData = weekMap.get(iso);
+        const wNum = idx + 1;
+        const r = startRow + rOffset;
+
+        wsYear.getCell(r, startCol).value = wNum;
+        wsYear.getCell(r, startCol + 1).value = formatDur(wData.work);
+        wsYear.getCell(r, startCol + 2).value = formatDur(wData.break);
+
+        const msg = (wData.work >= (40 * 3600000)) ? 'Target Met' : 'Under Target';
+        const sCell = wsYear.getCell(r, startCol + 3);
+        sCell.value = msg;
+        if (msg === 'Under Target') sCell.font = { color: { argb: 'FFFF0000' } };
+        else sCell.font = { color: { argb: 'FF000000' } };
+        rOffset++;
+      });
+
+      // Fill empty to 5 rows
+      for (let k = sortedIsos.length; k < 5; k++) {
+        const r = startRow + rOffset;
+        wsYear.getCell(r, startCol).value = k + 1;
+        wsYear.getCell(r, startCol + 1).value = "00:00:00";
+        wsYear.getCell(r, startCol + 2).value = "00:00:00";
+        const sCell = wsYear.getCell(r, startCol + 3);
+        sCell.value = "Under Target";
+        sCell.font = { color: { argb: 'FFFF0000' } };
+        rOffset++;
+      }
+      return 9;
+    };
+
+    let leftR = 1; let rightR = 1;
+    for (let m = 0; m < 12; m++) {
+      if (m < 6) { renderMonthBlock(m, leftR, 1); leftR += 10; }
+      else { renderMonthBlock(m, rightR, 6); rightR += 10; }
+    }
+
+
+    // --- SHARED HELPER FROM DIVISION EXPORT ---
+    const addDataRow = (sheet, key, val, wNum) => {
       const workHours = val.workMs / 3600000;
       const breakHours = val.breakMs / 3600000;
 
       let status = 'Off Day';
       const dayIdx = val.dateObj.day();
+      // user.workingDays might be undefined if not populated or set? 
+      // Safe default: 1-5
+      const userWorkDays = (user.workingDays && user.workingDays.length > 0) ? user.workingDays : [1, 2, 3, 4, 5];
+
       const isWeekend = (dayIdx === 0 || dayIdx === 6);
-      const userWorkDays = user.workingDays && user.workingDays.length > 0 ? user.workingDays : [1, 2, 3, 4, 5];
       const isDayOfWeekWork = userWorkDays.includes(dayIdx);
       const isHoliday = settings.holidays && settings.holidays.includes(key);
       const isWorkingDay = isDayOfWeekWork && !isHoliday;
@@ -959,7 +1010,6 @@ app.get('/admin/attendance/export-by-user', ensureRole('Admin'), async (req, res
       ]);
 
       row.font = dataStyle.font;
-      // Borders removed
 
       const statusCell = row.getCell(8);
       const breakCell = row.getCell(7);
@@ -972,110 +1022,118 @@ app.get('/admin/attendance/export-by-user', ensureRole('Admin'), async (req, res
       if (breakHours > 1) breakCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFCCCC' } };
     };
 
-    // Populate Sheet 1
-    for (const [key, val] of dayMap) {
+
+    // --- SHEET 2: Monthly Summary (CURRENT MONTH ONLY) ---
+    const wsMonth = workbook.addWorksheet('Monthly Summary');
+    const hRow1 = wsMonth.addRow(['Week', 'Date', 'Day', 'Clock In', 'Clock Out', 'Total Work', 'Total Break', 'Status']);
+    hRow1.eachCell(c => {
+      c.font = headerStyle.font; c.fill = headerStyle.fill;
+    });
+    wsMonth.getColumn(1).width = 8; wsMonth.getColumn(2).width = 15; wsMonth.getColumn(3).width = 15;
+    wsMonth.getColumn(4).width = 12; wsMonth.getColumn(5).width = 12; wsMonth.getColumn(6).width = 15;
+    wsMonth.getColumn(7).width = 15; wsMonth.getColumn(8).width = 20;
+
+    const sortedDays = Array.from(dayMap.values()).sort((a, b) => a.dateObj - b.dateObj);
+    let currentWeek = null;
+    let weekWorkMs = 0;
+
+    // Filter for Current Month
+    const now = moment();
+    const currentMonthStr = now.format('YYYY-MM');
+    const currentMonthDays = sortedDays.filter(d => d.dateObj.format('YYYY-MM') === currentMonthStr);
+
+    currentMonthDays.forEach(val => {
+      const key = val.dateObj.format('YYYY-MM-DD');
       const weekNum = val.dateObj.isoWeek();
+
       if (currentWeek !== null && weekNum !== currentWeek) {
-        const wRow = sheet1.addRow([null, null, null, 'Weekly Total', null, null, formatDur(weekWorkMs), null]);
+        const wRow = wsMonth.addRow([null, null, null, 'Weekly Total', null, null, formatDur(weekWorkMs), null]);
         wRow.font = weeklyStyle.font;
         wRow.eachCell(c => { if (weeklyStyle.fill) c.fill = weeklyStyle.fill; });
         weekWorkMs = 0;
       }
       currentWeek = weekNum;
       weekWorkMs += val.workMs;
-      addDataRow(sheet1, key, val, weekNum);
-    }
+      addDataRow(wsMonth, key, val, weekNum);
+    });
+    // Final total
     if (weekWorkMs > 0) {
-      const wRow = sheet1.addRow([null, null, null, 'Weekly Total', null, null, formatDur(weekWorkMs), null]);
+      const wRow = wsMonth.addRow([null, null, null, 'Weekly Total', null, null, formatDur(weekWorkMs), null]);
       wRow.font = weeklyStyle.font;
       wRow.eachCell(c => { if (weeklyStyle.fill) c.fill = weeklyStyle.fill; });
     }
 
-    // --- SHEET 2: Weekly Summary ---
-    const sheet2 = workbook.addWorksheet('Weekly Summary');
-    const hRow2 = sheet2.addRow(headers1);
-    hRow2.font = headerStyle.font;
-    hRow2.eachCell(c => { if (headerStyle.fill) c.fill = headerStyle.fill; });
 
-    sheet2.getColumn(1).width = 8; sheet2.getColumn(2).width = 15; sheet2.getColumn(3).width = 15;
-    sheet2.getColumn(4).width = 12; sheet2.getColumn(5).width = 12; sheet2.getColumn(6).width = 15;
-    sheet2.getColumn(7).width = 15; sheet2.getColumn(8).width = 20;
+    // --- SHEET 3: Weekly Summary (CURRENT WEEK ONLY) ---
+    const wsWeek = workbook.addWorksheet('Weekly Summary');
+    const hRowS3 = wsWeek.addRow(['Week', 'Date', 'Day', 'Clock In', 'Clock Out', 'Total Work', 'Total Break', 'Status']);
+    hRowS3.eachCell(c => {
+      c.font = headerStyle.font; c.fill = headerStyle.fill;
+    });
+    wsWeek.getColumn(1).width = 8; wsWeek.getColumn(2).width = 15; wsWeek.getColumn(3).width = 15;
+    wsWeek.getColumn(4).width = 12; wsWeek.getColumn(5).width = 12; wsWeek.getColumn(6).width = 15;
+    wsWeek.getColumn(7).width = 15; wsWeek.getColumn(8).width = 20;
 
-    const now = moment();
-    let targetWeek = now.isoWeek();
+    const targetWeek = now.isoWeek();
+    let wSum = 0;
 
-    const isCurrentMonth = now.format('YYYY-MM') === `${yearStr}-${monthStr}`;
-    if (!isCurrentMonth) {
-      targetWeek = endOfMonth.isoWeek();
-    }
-
-    let wSummaryWorkMs = 0;
-    let hasWData = false;
-
-    for (const [key, val] of dayMap) {
-      const weekNum = val.dateObj.isoWeek();
-      if (weekNum === targetWeek) {
-        addDataRow(sheet2, key, val, weekNum);
-        wSummaryWorkMs += val.workMs;
-        hasWData = true;
+    // Use sortedDays (Full Year) then filter? 
+    // Yes, just filter records for that week.
+    sortedDays.forEach(val => {
+      if (val.dateObj.isoWeek() === targetWeek) {
+        const key = val.dateObj.format('YYYY-MM-DD');
+        addDataRow(wsWeek, key, val, targetWeek);
+        wSum += val.workMs;
       }
-    }
-    if (hasWData) {
-      const wRow = sheet2.addRow([null, null, null, 'Weekly Total', null, null, formatDur(wSummaryWorkMs), null]);
+    });
+
+    if (wSum > 0 || sortedDays.some(d => d.dateObj.isoWeek() === targetWeek)) {
+      const wRow = wsWeek.addRow([null, null, null, 'Weekly Total', null, null, formatDur(wSum), null]);
       wRow.font = weeklyStyle.font;
       wRow.eachCell(c => { if (weeklyStyle.fill) c.fill = weeklyStyle.fill; });
     }
 
-    // --- SHEET 3: Daily Report (TODAY ONLY) ---
-    const sheet3 = workbook.addWorksheet('Daily Report');
+
+    // --- SHEET 4: Daily Report (Today Only) ---
+    const wsDaily = workbook.addWorksheet('Daily Report');
     const todayStr = moment().format('YYYY-MM-DD');
+    wsDaily.addRow([`Daily Report: ${todayStr}`]).font = { bold: true, size: 12 };
 
-    const titleRow = sheet3.addRow([`Daily Report: ${todayStr}`]);
-    titleRow.font = { bold: true, size: 12 };
+    const hRow3 = wsDaily.addRow(['Name', 'Email', 'Time', 'Action']);
+    hRow3.eachCell(c => { c.font = headerStyle.font; c.fill = headerStyle.fill; });
 
-    const headers3 = ['Name', 'Email', 'Time', 'Action'];
-    const hRow3 = sheet3.addRow(headers3);
+    wsDaily.getColumn(1).width = 25; wsDaily.getColumn(2).width = 30;
+    wsDaily.getColumn(3).width = 15; wsDaily.getColumn(4).width = 15;
 
-    hRow3.font = headerStyle.font;
-    hRow3.eachCell(c => { if (headerStyle.fill) c.fill = headerStyle.fill; });
-
-    sheet3.getColumn(1).width = 25;
-    sheet3.getColumn(2).width = 30;
-    sheet3.getColumn(3).width = 15;
-    sheet3.getColumn(4).width = 15;
-
-    // Filter records for TODAY ONLY
     const todayRecords = records.filter(r => moment(r.time).format('YYYY-MM-DD') === todayStr);
 
     if (todayRecords.length === 0) {
-      sheet3.addRow(['No attendance records found for today.']);
+      wsDaily.addRow(['No attendance records found for today.']);
     } else {
       todayRecords.forEach(r => {
-        const rRow = sheet3.addRow([
-          user.name,
-          user.email,
+        const rRow = wsDaily.addRow([
+          user.name, user.email,
           moment(r.time).format('HH:mm:ss'),
           r.action
         ]);
-
         const actCell = rRow.getCell(4);
         if (r.action === 'check-in') actCell.font = { color: { argb: 'FF008000' } };
         else if (r.action === 'check-out') actCell.font = { color: { argb: 'FFFF0000' } };
       });
     }
 
+    // Filename
     const safeName = (user.name || 'user').replace(/[^a-zA-Z0-9]/g, '_');
-    const fileName = `attendance-history-${safeName}-${monthStr}.xlsx`;
+    const fileName = `history-${safeName}-${yearParam}.xlsx`;
 
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
-
     await workbook.xlsx.write(res);
     res.end();
 
   } catch (err) {
     console.error(err);
-    res.status(500).send('Error generating Admin Excel file');
+    res.status(500).send('Error generating History Excel');
   }
 });
 

@@ -3,7 +3,7 @@ const path = require('path');
 
 async function checkTemplate() {
     const workbook = new ExcelJS.Workbook();
-    const filePath = path.join(__dirname, 'MasterFile', 'Individual Attendance Detail.xlsx');
+    const filePath = path.join(__dirname, 'MasterFile', 'Yearly Individual Attendance Detail.xlsx');
 
     try {
         await workbook.xlsx.readFile(filePath);
