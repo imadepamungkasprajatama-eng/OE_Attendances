@@ -814,28 +814,22 @@ app.get('/admin/attendance/export-yearly-final', ensureRole('Admin'), async (req
       return res.status(400).send('Invalid Year');
     }
 
-    console.time('DB_Query');
-    const records = await Attendance.find({
+    // --- Stream Data via Cursor (Memory Efficient) ---
+    console.time('DB_Stream');
+    const cursor = Attendance.find({
       user: userId,
       time: { $gte: startOfYear.toDate(), $lte: endOfYear.toDate() },
       action: { $in: ['check-in', 'check-out', 'break-start', 'break-end'] }
     })
       .select('user time action')
       .sort({ time: 1 })
-      .lean();
-    console.timeEnd('DB_Query');
-    console.log(`[DEBUG] Found ${records.length} records`);
-
-    // Safety check for record count
-    if (records.length > 20000) {
-      console.warn('[WARN] Large record set, might be slow');
-    }
+      .cursor();
 
     const settings = await SystemSettings.findOne() || { holidays: [], saturdayWorkHours: 4 };
 
     // --- Process Data (Unified dayMap) ---
-    // Map: YYYY-MM-DD -> { workMs, breakMs, ... }
     const dayMap = new Map();
+    // Initialize empty days first
     const curr = startOfYear.clone();
     let safeGuard = 0;
     while ((curr.isBefore(endOfYear) || curr.isSame(endOfYear, 'day')) && safeGuard < 400) {
@@ -851,7 +845,10 @@ app.get('/admin/attendance/export-yearly-final', ensureRole('Admin'), async (req
       safeGuard++;
     }
 
-    records.forEach(r => {
+    // Process cursor
+    let count = 0;
+    for (let r = await cursor.next(); r != null; r = await cursor.next()) {
+      count++;
       const dKey = moment(r.time).format('YYYY-MM-DD');
       if (dayMap.has(dKey)) {
         const day = dayMap.get(dKey);
@@ -883,39 +880,22 @@ app.get('/admin/attendance/export-yearly-final', ensureRole('Admin'), async (req
           day.lastCheckIn = t;
         }
       }
-    });
+    }
+    console.timeEnd('DB_Stream');
+    console.log(`[DEBUG] Processed ${count} records via stream`);
 
-    // --- Generate Excel (Unified Block) ---
+    // --- Generate Excel ---
     const workbook = new ExcelJS.Workbook();
 
-    // Default Styles
-    let headerStyle = { font: { bold: true, color: { argb: 'FFFFFFFF' } }, fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF4F46E5' } }, border: null };
-    let dataStyle = { font: {}, border: null };
-    let weeklyStyle = { font: { bold: true }, fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEEEEEE' } }, border: null };
-
-    // Attempt load styles from template
-    try {
-      const tempWb = new ExcelJS.Workbook();
-      await tempWb.xlsx.readFile(path.join(__dirname, 'MasterFile', 'Yearly Individual Attendance Detail.xlsx'));
-      const tempSheet = tempWb.getWorksheet(1);
-      if (tempSheet) {
-        const r1 = tempSheet.getRow(1);
-        if (r1.font) headerStyle.font = r1.font;
-        // Force Blue
-        headerStyle.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF4F46E5' } };
-        headerStyle.border = null;
-
-        const r2 = tempSheet.getRow(2);
-        if (r2.font) dataStyle.font = r2.font;
-        dataStyle.border = null;
-      }
-    } catch (e) { }
+    // Defined Styles (Code only, no template load for memory safety)
+    const headerStyle = { font: { bold: true, color: { argb: 'FFFFFFFF' } }, fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF4F46E5' } }, border: null };
+    const dataStyle = { font: {}, border: null };
+    const weeklyStyle = { font: { bold: true }, fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEEEEEE' } }, border: null };
 
     // Helper formatters
     const formatDur = (ms) => {
       if (!ms) return "00:00:00";
       const h = Math.floor(ms / 3600000);
-      const m = Math.floor((ms % 3600000) / 60000);
       const s = Math.floor((ms % 60000) / 1000);
       return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
     };
@@ -1129,7 +1109,13 @@ app.get('/admin/attendance/export-yearly-final', ensureRole('Admin'), async (req
     wsDaily.getColumn(1).width = 25; wsDaily.getColumn(2).width = 30;
     wsDaily.getColumn(3).width = 15; wsDaily.getColumn(4).width = 15;
 
-    const todayRecords = records.filter(r => moment(r.time).format('YYYY-MM-DD') === todayStr);
+    // Fetch Today's records specifically (small query)
+    const startOfToday = moment().startOf('day').toDate();
+    const endOfToday = moment().endOf('day').toDate();
+    const todayRecords = await Attendance.find({
+      user: userId,
+      time: { $gte: startOfToday, $lte: endOfToday }
+    }).sort({ time: 1 }).lean();
 
     if (todayRecords.length === 0) {
       wsDaily.addRow(['No attendance records found for today.']);
