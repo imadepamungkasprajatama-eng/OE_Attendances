@@ -823,7 +823,8 @@ app.get('/admin/attendance/export-yearly-final', ensureRole('Admin'), async (req
     })
       .select('user time action')
       .sort({ time: 1 })
-      .cursor();
+      .lean()
+      .cursor({ batchSize: 1000 });
 
     const settings = await SystemSettings.findOne() || { holidays: [], saturdayWorkHours: 4 };
 
@@ -845,15 +846,36 @@ app.get('/admin/attendance/export-yearly-final', ensureRole('Admin'), async (req
       safeGuard++;
     }
 
-    // Process cursor
+    // Process cursor with caching
     let count = 0;
+
+    // Optimization: Cache date string to avoid moment() on every record
+    // Records are sorted by time, so we often hit the same day multiple times in a row.
+    let cachedDayKey = null;
+    let cachedDayStart = 0;
+    let cachedDayEnd = 0;
+
     for (let r = await cursor.next(); r != null; r = await cursor.next()) {
       count++;
-      const dKey = moment(r.time).format('YYYY-MM-DD');
+      const t = r.time.getTime(); // Raw MS
+
+      // Determine dKey efficiently
+      let dKey;
+      if (t >= cachedDayStart && t <= cachedDayEnd && cachedDayKey) {
+        dKey = cachedDayKey;
+      } else {
+        // New day detected (or first run)
+        const m = moment(r.time);
+        dKey = m.format('YYYY-MM-DD');
+        cachedDayKey = dKey;
+        cachedDayStart = m.startOf('day').valueOf();
+        cachedDayEnd = m.endOf('day').valueOf();
+      }
+
       if (dayMap.has(dKey)) {
         const day = dayMap.get(dKey);
-        const t = r.time.getTime();
 
+        // logic...
         if (r.action === 'check-in') {
           if (!day.checkIn) day.checkIn = r.time;
           if (!day.in) day.in = r.time;
