@@ -806,8 +806,12 @@ app.get('/admin/attendance/export-yearly-final', ensureRole('Admin'), async (req
 
     const records = await Attendance.find({
       user: userId,
-      time: { $gte: startOfYear.toDate(), $lte: endOfYear.toDate() }
-    }).sort({ time: 1 });
+      time: { $gte: startOfYear.toDate(), $lte: endOfYear.toDate() },
+      action: { $in: ['check-in', 'check-out', 'break-start', 'break-end'] }
+    })
+      .select('user time action') // Exclude meta/lat/lng to save memory
+      .sort({ time: 1 })
+      .lean(); // Faster/lighter if not needing Mongoose document methods
 
     const settings = await SystemSettings.findOne() || { holidays: [], saturdayWorkHours: 4 };
 
