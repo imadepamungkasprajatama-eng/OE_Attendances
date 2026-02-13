@@ -17,16 +17,4 @@ Steps to run:
 
 Notes:
 - This is a starting point. Security hardening, validation, role management, UI polish, and production readiness are not fully implemented here.
-- QR is generated per day. Admin can re-generate.
-
-1. admin account harus .env yaitu: config, dbconnection, csv
-2. tambah control admin account di dashboard: with CRUD
-3. QR dibuat admin dan akan di reset setiap 23.59 PM UTC(device loc) 
-4. tambahkan waktu kerja + waktu break
-5. tambahkan anti fake location (https://github.com/jpudysz/react-native-turbo-mock-location-detector)
-6. pastikan QR hanya bisa check-in (tombol abu2 sebelum scan QR)
-7. tambahkan fitur untuk admin dan HR ekspor data kehadiran semuanya
-8. tambah divisi untuk spv dan staff, spv bisa melihat jam kerja staff divisi masing2, staff bisa melihat jam kerja pribadi
-9. tambahan filter staff untuk admin dan HR berisi nama, divisi, jam check-in,out, jumlah total jam break, indikasi centang silang
-10. QR tambahan link login
-11. 
+- QR is generated per day.
