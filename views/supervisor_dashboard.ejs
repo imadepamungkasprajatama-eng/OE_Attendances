@@ -11,14 +11,18 @@
     <div class="mb-4">
       <% if (query.msg==='userUpdated' ) { %>
         <div class="alert alert-success border-0 shadow-sm rounded-3">User data updated successfully.</div>
-        <% } else if (query.msg==='userDeleted' ) { %>
-          <div class="alert alert-success border-0 shadow-sm rounded-3">User and attendance history deleted
-            successfully.</div>
-          <% } else if (query.msg==='userNotFound' ) { %>
-            <div class="alert alert-warning border-0 shadow-sm rounded-3">User not found.</div>
-            <% } else if (query.msg==='error' ) { %>
-              <div class="alert alert-danger border-0 shadow-sm rounded-3">An error occurred.</div>
-              <% } %>
+        <% } else if (query.msg==='userCreated' ) { %>
+          <div class="alert alert-success border-0 shadow-sm rounded-3">User created successfully.</div>
+          <% } else if (query.msg==='userDeleted' ) { %>
+            <div class="alert alert-success border-0 shadow-sm rounded-3">User and attendance history deleted
+              successfully.</div>
+            <% } else if (query.msg==='userNotFound' ) { %>
+              <div class="alert alert-warning border-0 shadow-sm rounded-3">User not found.</div>
+              <% } else if (query.msg==='error' ) { %>
+                <div class="alert alert-danger border-0 shadow-sm rounded-3">An error occurred.</div>
+                <% } else if (query.msg==='exists' ) { %>
+                  <div class="alert alert-danger border-0 shadow-sm rounded-3">Email already registered!</div>
+                  <% } %>
     </div>
     <% } %>
 

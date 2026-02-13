@@ -1840,8 +1840,12 @@ app.post('/admin/create-user', checkUserManagement, async (req, res) => {
     durationWorkHours, durationBreakMinutes, shiftGroup
   } = req.body;
 
+  const referer = req.get('Referer');
+  const isSupervisor = referer && referer.includes('/supervisor');
+  const dashboardUrl = isSupervisor ? '/supervisor' : '/';
+
   let u = await User.findOne({ email });
-  if (u) return res.redirect('/?msg=exists');
+  if (u) return res.redirect(`${dashboardUrl}?msg=exists`);
 
   const hashed = password ? await bcrypt.hash(password, 10) : undefined;
 
@@ -1859,13 +1863,8 @@ app.post('/admin/create-user', checkUserManagement, async (req, res) => {
   });
 
   await u.save();
-  await u.save();
 
-  const referer = req.get('Referer');
-  if (referer && referer.includes('/supervisor')) {
-    return res.redirect('/supervisor?msg=userCreated');
-  }
-  res.redirect('/?msg=userCreated');
+  res.redirect(`${dashboardUrl}?msg=userCreated`);
 });
 
 // ADMIN/HR: update user
@@ -1877,9 +1876,21 @@ app.post('/admin/update-user', checkUserManagement, async (req, res) => {
       durationWorkHours, durationBreakMinutes, shiftGroup
     } = req.body;
 
+    const referer = req.get('Referer');
+    const isSupervisor = referer && referer.includes('/supervisor');
+    const dashboardUrl = isSupervisor ? '/supervisor' : '/';
+
     const user = await User.findById(userId);
     if (!user) {
-      return res.redirect('/?msg=userNotFound');
+      return res.redirect(`${dashboardUrl}?msg=userNotFound`);
+    }
+
+    // Check for duplicate email if email is being changed
+    if (email !== user.email) {
+      const existing = await User.findOne({ email });
+      if (existing) {
+        return res.redirect(`${dashboardUrl}?msg=exists`);
+      }
     }
 
     user.name = name;
@@ -1897,17 +1908,14 @@ app.post('/admin/update-user', checkUserManagement, async (req, res) => {
     }
 
     await user.save();
-    await user.save();
 
-    // Redirect based on Referer or Origin
-    const referer = req.get('Referer');
-    if (referer && referer.includes('/supervisor')) {
-      return res.redirect('/supervisor?msg=userUpdated');
-    }
-    res.redirect('/?msg=userUpdated');
+    res.redirect(`${dashboardUrl}?msg=userUpdated`);
   } catch (err) {
     console.error(err);
-    res.redirect('/?msg=error');
+    const referer = req.get('Referer');
+    const isSupervisor = referer && referer.includes('/supervisor');
+    const dashboardUrl = isSupervisor ? '/supervisor' : '/';
+    res.redirect(`${dashboardUrl}?msg=error`);
   }
 });
 
@@ -2445,3 +2453,219 @@ mongoose.connect(process.env.MONGODB_URI, {
   // Start Server
   app.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`));
 }).catch(err => console.error("MongoDB connection error:", err));
+
+// USER: Download My History (Excel)
+app.get('/attendance/export-my-history', ensureAuth, async (req, res) => {
+  try {
+    const { month } = req.query; // "YYYY-MM" (Optional, defaults to current)
+
+    let targetDate = moment();
+    if (month) {
+      targetDate = moment(month, 'YYYY-MM');
+      if (!targetDate.isValid()) targetDate = moment();
+    }
+
+    const yearStr = targetDate.format('YYYY');
+    const monthStr = targetDate.format('MM');
+    // For filename
+    const monthName = targetDate.format('MMMM_YYYY');
+
+    const startOfMonth = targetDate.clone().startOf('month');
+    const endOfMonth = targetDate.clone().endOf('month');
+
+    const userId = req.user._id;
+    const user = req.user; // already populated by passport
+
+    const settings = await SystemSettings.findOne() || { holidays: [], saturdayWorkHours: 4 };
+
+    const records = await Attendance.find({
+      user: userId,
+      time: { $gte: startOfMonth.toDate(), $lte: endOfMonth.toDate() }
+    }).sort({ time: 1 });
+
+    // --- Aggregation Logic (Same as Supervisor) ---
+    const dayMap = new Map();
+    const daysInMonth = startOfMonth.daysInMonth();
+    for (let i = 1; i <= daysInMonth; i++) {
+      const d = startOfMonth.clone().date(i);
+      const dayKey = d.format('YYYY-MM-DD');
+      dayMap.set(dayKey, {
+        dateObj: d,
+        dayName: d.format('dddd'),
+        checkIn: null, checkOut: null,
+        workMs: 0, breakMs: 0,
+        lastCheckIn: null, lastBreakStart: null
+      });
+    }
+
+    records.forEach(r => {
+      const dayKey = moment(r.time).format('YYYY-MM-DD');
+      const data = dayMap.get(dayKey);
+      if (!data) return;
+      const t = r.time.getTime();
+
+      if (r.action === 'check-in') {
+        if (!data.checkIn) data.checkIn = r.time;
+        data.lastCheckIn = t;
+      } else if (r.action === 'check-out') {
+        if (!data.checkOut || r.time > data.checkOut) data.checkOut = r.time;
+        if (data.lastCheckIn) { data.workMs += (t - data.lastCheckIn); data.lastCheckIn = null; }
+      } else if (r.action === 'break-start') {
+        if (data.lastCheckIn) { data.workMs += (t - data.lastCheckIn); data.lastCheckIn = null; }
+        data.lastBreakStart = t;
+      } else if (r.action === 'break-end') {
+        if (data.lastBreakStart) { data.breakMs += (t - data.lastBreakStart); data.lastBreakStart = null; }
+        data.lastCheckIn = t;
+      }
+    });
+
+    // --- Generate Excel (Same as Supervisor) ---
+    const workbook = new ExcelJS.Workbook();
+    // No template load here -> consistent style definitions
+    const headerStyle = { font: { bold: true, color: { argb: 'FFFFFFFF' } }, fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF4F46E5' } } };
+    const dataStyle = { font: {}, border: null };
+    const weeklyStyle = { font: { bold: true }, fill: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEEEEEE' } } };
+
+    // Helper
+    const formatDur = (ms) => {
+      if (!ms) return "00:00:00";
+      const h = Math.floor(ms / 3600000);
+      const m = Math.floor((ms % 3600000) / 60000);
+      const s = Math.floor((ms % 60000) / 1000);
+      return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+    };
+
+    const addDataRow = (sheet, key, val, wNum) => {
+      const workHours = val.workMs / 3600000;
+      const breakHours = val.breakMs / 3600000;
+      let status = 'Off Day';
+      const dayIdx = val.dateObj.day();
+      const isWeekend = (dayIdx === 0 || dayIdx === 6);
+      const userWorkDays = user.workingDays && user.workingDays.length > 0 ? user.workingDays : [1, 2, 3, 4, 5];
+      const isDayOfWeekWork = userWorkDays.includes(dayIdx);
+      const isHoliday = settings.holidays && settings.holidays.includes(key);
+      const isWorkingDay = isDayOfWeekWork && !isHoliday;
+
+      if (val.checkIn) {
+        status = (workHours >= 8) ? 'Target Met' : 'Under Target';
+        if (isWeekend || !isWorkingDay) status += ' (Overtime)';
+        if (isHoliday) status = 'Holiday (Worked)';
+      } else {
+        if (isHoliday) status = 'Holiday';
+        else status = isWorkingDay ? 'Absent' : 'Off Day';
+      }
+
+      const row = sheet.addRow([
+        wNum, key, val.dayName,
+        val.checkIn ? moment(val.checkIn).format('HH:mm') : '-',
+        val.checkOut ? moment(val.checkOut).format('HH:mm') : '-',
+        formatDur(val.workMs),
+        formatDur(val.breakMs),
+        status
+      ]);
+      row.font = dataStyle.font;
+      row.eachCell(c => { if (dataStyle.border) c.border = dataStyle.border; });
+
+      const statusCell = row.getCell(8);
+      const breakCell = row.getCell(7);
+
+      if (status.includes('Target Met')) statusCell.font = { color: { argb: 'FF008000' } };
+      else if (status.includes('Under Target') || status === 'Absent') statusCell.font = { color: { argb: 'FFFF0000' } };
+      else if (status.includes('Holiday')) statusCell.font = { color: { argb: 'FFEB5E28' } };
+      else statusCell.font = { color: { argb: 'FF999999' } };
+
+      if (breakHours > 1) breakCell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFFCCCC' } };
+    };
+
+    // SHEET 1 (Monthly)
+    const sheet1 = workbook.addWorksheet('Monthly Summary');
+    const hRow1 = sheet1.addRow(['Week', 'Date', 'Day', 'Clock In', 'Clock Out', 'Total Work', 'Total Break', 'Status']);
+    hRow1.eachCell(c => { c.font = headerStyle.font; c.fill = headerStyle.fill; });
+    sheet1.getColumn(1).width = 8; sheet1.getColumn(2).width = 15; sheet1.getColumn(3).width = 15;
+    sheet1.columns.slice(3).forEach((c, i) => c.width = (i === 4) ? 20 : 15); // approx
+
+    let currentWeek = null;
+    let weekWorkMs = 0;
+    for (const [key, val] of dayMap) {
+      const weekNum = val.dateObj.isoWeek();
+      if (currentWeek !== null && weekNum !== currentWeek) {
+        const wRow = sheet1.addRow([null, null, null, 'Weekly Total', null, null, formatDur(weekWorkMs), null]);
+        wRow.font = weeklyStyle.font;
+        wRow.eachCell(c => { if (weeklyStyle.fill) c.fill = weeklyStyle.fill; });
+        weekWorkMs = 0;
+      }
+      currentWeek = weekNum;
+      weekWorkMs += val.workMs;
+      addDataRow(sheet1, key, val, weekNum);
+    }
+    if (weekWorkMs > 0) {
+      const wRow = sheet1.addRow([null, null, null, 'Weekly Total', null, null, formatDur(weekWorkMs), null]);
+      wRow.font = weeklyStyle.font;
+      wRow.eachCell(c => { if (weeklyStyle.fill) c.fill = weeklyStyle.fill; });
+    }
+
+    // SHEET 2 (Weekly)
+    const sheet2 = workbook.addWorksheet('Weekly Summary');
+    const hRow2 = sheet2.addRow(['Week', 'Date', 'Day', 'Clock In', 'Clock Out', 'Total Work', 'Total Break', 'Status']);
+    hRow2.eachCell(c => { c.font = headerStyle.font; c.fill = headerStyle.fill; });
+
+    // Default show "Current Week" relative to Real Time? OR relative to the selected Month?
+    // Supervisor logic: "If now is in selected month, show current week. Else show last week of month."
+    const now = moment();
+    let targetWeek = now.isoWeek();
+    const isCurrentMonth = now.format('YYYY-MM') === `${yearStr}-${monthStr}`;
+    if (!isCurrentMonth) targetWeek = endOfMonth.isoWeek();
+
+    let wSummaryWorkMs = 0;
+    let hasWData = false;
+    for (const [key, val] of dayMap) {
+      if (val.dateObj.isoWeek() === targetWeek) {
+        addDataRow(sheet2, key, val, val.dateObj.isoWeek());
+        wSummaryWorkMs += val.workMs;
+        hasWData = true;
+      }
+    }
+    if (hasWData) {
+      const wRow = sheet2.addRow([null, null, null, 'Weekly Total', null, null, formatDur(wSummaryWorkMs), null]);
+      wRow.font = weeklyStyle.font;
+      wRow.eachCell(c => { if (weeklyStyle.fill) c.fill = weeklyStyle.fill; });
+    }
+
+    // SHEET 3 (Daily - Today)
+    const sheet3 = workbook.addWorksheet('Daily Report');
+    const todayStr = moment().format('YYYY-MM-DD');
+    sheet3.addRow([`Daily Report: ${todayStr}`]).font = { bold: true };
+    const hRow3 = sheet3.addRow(['Name', 'Email', 'Time', 'Action']);
+    hRow3.eachCell(c => { c.font = headerStyle.font; c.fill = headerStyle.fill; });
+    sheet3.getColumn(1).width = 25; sheet3.getColumn(2).width = 30;
+
+    const todayRecords = await Attendance.find({
+      user: userId,
+      time: { $gte: moment().startOf('day').toDate(), $lte: moment().endOf('day').toDate() }
+    }).sort({ time: 1 });
+
+    if (todayRecords.length === 0) {
+      sheet3.addRow(['No attendance records found for today.']);
+    } else {
+      todayRecords.forEach(r => {
+        const rRow = sheet3.addRow([user.name, user.email, moment(r.time).format('HH:mm:ss'), r.action]);
+        const actCell = rRow.getCell(4);
+        if (r.action === 'check-in') actCell.font = { color: { argb: 'FF008000' } };
+        else if (r.action === 'check-out') actCell.font = { color: { argb: 'FFFF0000' } };
+        rRow.eachCell(c => { if (dataStyle.border) c.border = dataStyle.border; });
+      });
+    }
+
+    const safeName = (user.name || 'user').replace(/[^a-zA-Z0-9]/g, '_');
+    const fileName = `my_attendance_${safeName}_${monthName}.xlsx`;
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+    await workbook.xlsx.write(res);
+    res.end();
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).send('Error generating My History Excel: ' + err.message);
+  }
+});

@@ -12,15 +12,19 @@
               <div class="alert alert-danger border-0 shadow-sm rounded-3">Terjadi kesalahan saat memproses data.</div>
               <% } else if (query.msg==='userUpdated' ) { %>
                 <div class="alert alert-success border-0 shadow-sm rounded-3">Data user berhasil diupdate.</div>
-                <% } else if (query.msg==='userDeleted' ) { %>
-                  <div class="alert alert-success border-0 shadow-sm rounded-3">User beserta history absen berhasil
-                    dihapus.</div>
-                  <% } else if (query.msg==='userNotFound' ) { %>
-                    <div class="alert alert-warning border-0 shadow-sm rounded-3">User tidak ditemukan.</div>
-                    <% } else if (query.msg==='settingsUpdated' ) { %>
-                      <div class="alert alert-success border-0 shadow-sm rounded-3">System settings updated
-                        successfully.</div>
-                      <% } %>
+                <% } else if (query.msg==='userCreated' ) { %>
+                  <div class="alert alert-success border-0 shadow-sm rounded-3">User berhasil dibuat.</div>
+                  <% } else if (query.msg==='userDeleted' ) { %>
+                    <div class="alert alert-success border-0 shadow-sm rounded-3">User beserta history absen berhasil
+                      dihapus.</div>
+                    <% } else if (query.msg==='userNotFound' ) { %>
+                      <div class="alert alert-warning border-0 shadow-sm rounded-3">User tidak ditemukan.</div>
+                      <% } else if (query.msg==='settingsUpdated' ) { %>
+                        <div class="alert alert-success border-0 shadow-sm rounded-3">System settings updated
+                          successfully.</div>
+                        <% } else if (query.msg==='exists' ) { %>
+                          <div class="alert alert-danger border-0 shadow-sm rounded-3">Email already registered!</div>
+                          <% } %>
     </div>
     <% } %>
 
