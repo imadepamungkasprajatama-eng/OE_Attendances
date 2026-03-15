@@ -3,11 +3,19 @@ const crypto = require('crypto');
 const Schema = mongoose.Schema;
 const QRTokenSchema = new Schema({
   token: String,
-  date: String, // ISO date string yyyy-mm-dd
+  date: String, // ISO date string yyyy-mm-dd (Asia/Makassar, UTC+8)
   createdAt: { type: Date, default: Date.now }
 });
+
+// Helper: get today's date string in Asia/Makassar timezone (UTC+8)
+// Using a fixed offset to avoid timezone library dependency
+function getTodayMakassar() {
+  // UTC+8 = UTC + 8 hours
+  return new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString().slice(0, 10);
+}
+
 QRTokenSchema.statics.generateDaily = async function () {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = getTodayMakassar();
 
   // 1. Cek dulu apakah sudah ada token untuk hari ini
   let doc = await this.findOne({ date: today });
@@ -24,13 +32,13 @@ QRTokenSchema.statics.generateDaily = async function () {
   return doc;
 };
 QRTokenSchema.statics.getCurrent = async function () {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = getTodayMakassar();
   let doc = await this.findOne({ date: today });
   if (!doc) doc = await this.generateDaily();
   return doc;
 };
 QRTokenSchema.statics.validate = async function (token) {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = getTodayMakassar();
   const doc = await this.findOne({ date: today });
   if (!doc) return false;
   return doc.token === token;

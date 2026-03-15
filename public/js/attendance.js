@@ -16,7 +16,9 @@ async function postAction(action, qrToken, lat, lng, accuracy) {
     return res.json();
   } else {
     // Likely HTML (Login Page) -> Session Expired
-    return { error: "Session expired. reloading..." };
+    // Auto-redirect to login after showing the error
+    setTimeout(() => { window.location.href = '/login'; }, 2000);
+    return { error: "Session expired. Redirecting to login page..." };
   }
 }
 
@@ -90,7 +92,7 @@ async function doGeolocatedAction(action, qrToken) {
       title: 'Geolocation Error',
       text: err.message + '. Ensure GPS is enabled.'
     });
-  }, { enableHighAccuracy: true, timeout: 30000, maximumAge: 0 });
+  }, { enableHighAccuracy: true, timeout: 30000, maximumAge: 15000 }); // Allow 15s cached position to reduce GPS failures
 }
 
 // QR Persistance + UI Locking
@@ -363,14 +365,6 @@ function setupUILock() {
   }
 
   setupNavigationGuard();
-
-  // Auto-Logout if Idle on Tab Close (BUT NOT on Navigation)
-  window.addEventListener('pagehide', () => {
-    if (window.USER_STATUS === 'idle' && !isNavigating) {
-      // Use sendBeacon for reliable request on unload
-      navigator.sendBeacon('/auth/logout');
-    }
-  });
 }
 
 // Initialize

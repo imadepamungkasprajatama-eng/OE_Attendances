@@ -35,6 +35,12 @@ app.use(session({
   secret: process.env.SESSION_SECRET || 'secret',
   resave: false,
   saveUninitialized: false,
+  rolling: true, // Refresh the cookie expiry on each request
+  cookie: {
+    maxAge: 1000 * 60 * 60 * 24, // 24 hours — survives tab/browser closes
+    secure: process.env.NODE_ENV === 'production', // HTTPS only in production
+    sameSite: 'lax'
+  },
   store: MongoStore.create({
     mongoUrl: process.env.MONGODB_URI,
     autoRemove: 'native' // Fix for "Unable to find the session to touch"
@@ -143,25 +149,7 @@ function checkUserManagement(req, res, next) {
   return res.status(403).send('Forbidden: HR Access Required');
 }
 
-// Middleware to check pending logout
-app.use((req, res, next) => {
-  if (req.session && req.session.logoutScheduledAt) {
-    if (Date.now() > req.session.logoutScheduledAt) {
-      console.log(`[Auto-Logout] Scheduled logout executed for ${req.user ? req.user.email : 'Unknown'}`);
-      req.logout((err) => {
-        req.session.destroy();
-        res.redirect('/login');
-      });
-      return;
-    } else {
-      // User is back! Cancel scheduled logout
-      console.log(`[Auto-Logout] User returned. Cancelled scheduled logout.`);
-      delete req.session.logoutScheduledAt;
-      req.session.save();
-    }
-  }
-  next();
-});
+
 
 // Logout Routes
 app.get('/logout', (req, res) => {
@@ -173,27 +161,7 @@ app.get('/logout', (req, res) => {
   });
 });
 
-app.post('/auth/logout', (req, res) => {
-  console.log(`[Auto-Logout] Beacon received for ${req.user ? req.user.email : 'Unknown'}`);
-  req.logout((err) => {
-    if (err) {
-      console.error(err);
-      return res.status(500).send('Error');
-    }
-    req.session.destroy(); // Explicitly destroy session
-    // sendBeacon expects no response, but we send 200 OK
-    res.status(200).send('Logged out');
-  });
-});
 
-app.post('/auth/logout-delayed', (req, res) => {
-  if (req.session) {
-    console.log(`[Auto-Logout] Scheduling logout in 1 minute for ${req.user ? req.user.email : 'Unknown'}`);
-    req.session.logoutScheduledAt = Date.now() + 60000; // 1 minute
-    req.session.save();
-  }
-  res.status(200).send('Scheduled');
-});
 
 // Helper: Format Seconds to HH:mm:ss
 function formatDuration(sec) {
@@ -1988,16 +1956,17 @@ app.post('/attendance/action', ensureAuth, async (req, res) => {
     const dist = distanceMeters(officeLat, officeLng, Number(lat), Number(lng));
     console.log(`[Check-In Debug] Calculated Distance: ${Math.round(dist)}m`);
 
-    // Strict for Check-In/Break-Start, Relaxed for Check-Out/Break-End
-    let allowedRadius = radius;
+    // For all actions: add a minimum 50m GPS drift buffer on top of the configured radius
+    // This handles indoor/under-roof GPS inaccuracy on both mobile and desktop
+    let allowedRadius = Math.max(radius + 50, radius * 2);
     if (action === 'check-out' || action === 'break-end') {
-      // Allow up to 200m OR 5x radius for checking out (handles GPS drift or walking to parking lot)
+      // Even more relaxed for exits (handles GPS drift or walking to parking lot)
       allowedRadius = Math.max(radius * 5, 200);
     }
 
     if (dist > allowedRadius) {
       return res.status(400).json({
-        error: `Out of allowed location. Distance: ${Math.round(dist)}m (Allowed: ${allowedRadius}m)`
+        error: `Out of allowed location. Distance: ${Math.round(dist)}m (Allowed: ${allowedRadius}m). Please move closer to the office.`
       });
     }
 
